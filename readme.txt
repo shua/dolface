@@ -15,4 +15,4 @@ There's no needed includes other than the std c library.
 
 TODO:
 segment .bss into appropriate .sbss and .sbss2 sections
-figure out what to do with extab and extabndx
+figure out what to do with extab and extabindex

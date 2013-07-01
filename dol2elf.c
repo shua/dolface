@@ -307,7 +307,7 @@ void map_elf(ELF_map *map)
     if(verbosity >= 2)
         fprintf(stderr, "Creating Section Header String Table\n");
 
-    char* shstr[12] = {".init", ".text", ".PPC.extab", ".PPC.extabidx", ".ctors", ".dtors", ".rodata", ".data", ".sdata", ".sdata2", ".bss", ".shstrtab"};
+    char* shstr[12] = {".init", ".text", "extab", "extabindex", ".ctors", ".dtors", ".rodata", ".data", ".sdata", ".sdata2", ".bss", ".shstrtab"};
     int shstrtablen[12];
     int shstrtabndx[12];
     map->shstrtabsz = 1;
