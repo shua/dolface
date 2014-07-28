@@ -12,6 +12,7 @@
 // NOTE I don't understand how they calculate offsets, it seems to be
 //  0x20 aligned, like file sizes, but some files are pushed for no
 //  apparent reason.
+//const int _initial_off = 0x45e540; 
 const int _initial_off = 0x45d640; 
 
 // swap functions
@@ -77,41 +78,68 @@ struct IdxOff {
     int idx;
     unsigned int off;
 };
+struct Alignment {
+    char* path;
+    int align;
+};
 
-int filter_dot(const struct dirent* d) { return (d->d_name[0] != '.'); }
+int _filterdot(const struct dirent* d) { return (d->d_name[0] != '.'); }
 // for some reason, this is how the original fst is sorted
-//  first lowercase, then uppercase, then punctuation
+// underscore (_) has lower precedance
 int _fststrcmp(const char* a, const char* b) {
     int i=0,ga=0,gb=0;
     while(a[i] == b[i] && a[i] != '\0' && b[i] != '\0') i++;
     if(a[i] == '\0' || b[i] == '\0') return a[i] - b[i];
 
-    if(a[i] <= '9' && a[i] >= '0') ga=0;
-    else if(a[i] <= 'z' && a[i] >= 'a') ga=1;
-    else if(a[i] <= 'Z' && a[i] >='A') ga=2;
-    else ga=3;
-    if(b[i] <= '9' && b[i] >= '0') gb=0;
-    else if(b[i] <= 'z' && b[i] >='a') gb=1;
-    else if(b[i] <= 'Z' && b[i] >= 'A') gb=2;
-    else gb=3;
+    if(a[i] == '_') ga=1;
+    if(b[i] == '_') gb=1;
 
     if(ga == gb)
-        return a[i] - b[i];
+        return strcasecmp(a, b);
     else
         return ga - gb;
 }
-int fstsort(const struct dirent** a, const struct dirent** b) {
+int _fstsort(const struct dirent** a, const struct dirent** b) {
     return _fststrcmp((*a)->d_name, (*b)->d_name);
 }
 
-struct IdxOff stat_dir(char* dirname, FILE* fp, struct IdxOff idxoff, unsigned int pidx, struct StrArray* strtab) {
+int _alignregex(const char* dirname, const char* alignpath) {
+    int j=strlen(dirname)+1, k=strlen(alignpath)+1;
+    do {
+        j--; k--;
+        if(alignpath[k] == '*') {
+            if(alignpath[k-1] != '/' && k != 0) {
+                printf("Don't get tricky with alignment regex (folder/*.end)");
+            } else {
+                if(k==0) {
+                    k=-1; j=-1;
+                } else {
+                    k--;
+                    while(j>=0 && alignpath[k] != dirname[j]) { j--; }
+                }
+            }
+        }
+    } while(dirname[j] == alignpath[k] && j >= 0 && k >= 0);
+
+    if(dirname[j] == '/' || ((j == -1) && (k == -1))) {
+        return 1;
+    }
+    return 0;
+}
+
+struct IdxOff stat_dir( char* dirname, 
+                        FILE* fp, 
+                        struct IdxOff idxoff, 
+                        unsigned int pidx,
+                        struct Alignment* alignments,
+                        struct StrArray* strtab) {
     struct dirent** namelist;
     int namelistsz;
     struct FstEntry entry = {0};
     struct stat s;
     int staterr;
 
-    namelistsz = scandir(dirname, &namelist, filter_dot, fstsort);
+    namelistsz = scandir(dirname, &namelist, _filterdot, _fstsort);
     if(namelistsz < 0) {
         perror("scandir");
         idxoff.idx = -1;
@@ -139,7 +167,7 @@ struct IdxOff stat_dir(char* dirname, FILE* fp, struct IdxOff idxoff, unsigned i
             entry.parent_off = swap32(pidx);
             fseek(fp, 12, SEEK_CUR);
             
-            idxoff = stat_dir(path, fp, idxoff, tmp.idx, strtab);
+            idxoff = stat_dir(path, fp, idxoff, tmp.idx, alignments, strtab);
             if(idxoff.idx < 0) {
                 while(n < namelistsz)
                     free(namelist[n++]);
@@ -154,7 +182,16 @@ struct IdxOff stat_dir(char* dirname, FILE* fp, struct IdxOff idxoff, unsigned i
             fseek(fp, nextpos, SEEK_SET);
 
         } else if(s.st_mode & S_IFREG) {
-            int size = (s.st_size / 0x20 + (((s.st_size % 0x20) == 0)?0:1)) * 0x20;
+            int align = 0x20;
+            for(int i=0; alignments[i].path != 0; i++) {
+                if(_alignregex(path, alignments[i].path)) {
+                    align = alignments[i].align;
+                    break;
+                }
+            }
+
+            idxoff.off += ((idxoff.off % align) == 0)?0:(align - idxoff.off % align);
+            int size = s.st_size;
             int name = insertStr(strtab, namelist[n]->d_name);
             
             _esetid(&entry, FST_TFILE, name);
@@ -181,7 +218,11 @@ int generate_fst(char* gamedir, char* fileout) {
     FILE* fp = fopen(fileout, "w");
     fseek(fp, 12, SEEK_SET);
     struct IdxOff entries = { 1, _initial_off };
-    entries = stat_dir(gamedir, fp, entries, 0, &strtab);
+    struct Alignment alignments[] = {
+        { "root/*.dat", 0x8000 },
+        { 0 , 0}
+    };
+    entries = stat_dir(gamedir, fp, entries, 0, alignments, &strtab);
 
     fwrite(strtab.m, strtab.size, 1, fp);
     free(strtab.m);
@@ -190,6 +231,12 @@ int generate_fst(char* gamedir, char* fileout) {
     _esetid(&root, FST_TDIR, 0);
     fseek(fp, 0, SEEK_SET);
     fwrite(&root, 12, 1, fp);
+    fseek(fp, 0, SEEK_END);
+    long length = ftell(fp);
+    long padbytes = 0x10 - length % 0x10;
+    char padding[padbytes];
+    memset(padding, 0, padbytes);
+    fwrite(padding, padbytes, 1, fp);
 
     fclose(fp);
     return 0;
@@ -236,13 +283,18 @@ void print_fst(char* fst) {
 
     rewind(fp);
     fread(&entry, 12, 1, fp);
+    struct FstEntry last={0};
+    printf("t %8s %8s %8s name\n", "file_off", "size", "padding");
     for(int i = 1; i < entries; i++) {
         fread(&entry, 12, 1, fp);
-        printf( "%s %08x %08x %s\n", 
+        printf( "%s %8x %8x %8x %s\n", 
                 (_etype(entry) == FST_TDIR)?"d":"f",
                 swap32(entry.file_off),
                 swap32(entry.file_length),
+                swap32(entry.file_off) - swap32(last.file_off) - swap32(last.file_length),
                 strtab + _ename(entry));
+        if(_etype(entry) == FST_TFILE)
+            last = entry;
     }
 
     free(strtab);

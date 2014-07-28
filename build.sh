@@ -10,6 +10,6 @@ fi
 rm -rf bin/*
 
 $cc $cflags dol2elf/dol2elf.c -o bin/dol2elf
-$cc $cflags chop/chop.c -o bin/chop
-$cc $cflags -Ifsticuff fsticuff/fsticuff.c fsticuff/main.c -o bin/fsticuff
+$cc $cflags chum/chum.c -o bin/chum
+$cc $cflags -Icobbler cobbler/fsticuff.c cobbler/main.c -o bin/cobble
 
