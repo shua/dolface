@@ -141,8 +141,11 @@ typedef struct {
 	FILE *dol;
 } ELF_map;
 
-void usage(const char *name)
+void usage(const char *p)
 {
+    int i=strlen(p);
+    while(i!=0 && p[i-1] != '/') { i--; }
+    const char* name = p+i;
     fprintf(stderr, "Usage: %s [-h] [-v] [--] dol-file elf-file\n", name);
     fprintf(stderr, " Convert a DOL file to an ELF file (by segments)\n");
     fprintf(stderr, " Options:\n");
@@ -279,7 +282,7 @@ void map_elf(ELF_map *map)
         fprintf(stderr, "Laying out ELF file...\n");
 
     uint32_t fpos;
-    int i, shstrtabsz;
+    int i;
 
     unsigned char ident[] = {'\177', 'E', 'L', 'F', ELFCLASS32, ELFDATA2MSB, EV_CURRENT, '\0'};
     memcpy(map->header.e_ident, ident, 7);

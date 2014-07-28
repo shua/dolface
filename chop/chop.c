@@ -26,11 +26,6 @@ static inline uint32_t swap32(uint32_t v)
 	       (v << 24);
 }
 
-static inline uint16_t swap16(uint16_t v)
-{
-	return (v >> 8) | (v << 8);
-}
-
 #endif /* BIG_ENDIAN */
 
 typedef struct {
@@ -49,7 +44,10 @@ typedef struct {
 
 void usage(const char* p)
 {
-    fprintf(stderr, "Usage: %s [-h] [-v] [--] dol-file destination\n", p);
+    int i=strlen(p);
+    while(i!=0 && p[i-1] != '/') { i--; }
+    const char* name = p+i;
+    fprintf(stderr, "Usage: %s [-h] [-v] [--] dol-file destination\n", name);
     fprintf(stderr, " Chop a dol file into it's sections as defined by the header.\n");
     fprintf(stderr, " Options:\n");
     fprintf(stderr, "  -h    Show this help\n");

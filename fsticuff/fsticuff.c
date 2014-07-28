@@ -186,7 +186,7 @@ int generate_fst(char* gamedir, char* fileout) {
     fwrite(strtab.m, strtab.size, 1, fp);
     free(strtab.m);
 
-    struct FstEntry root = { 0, 0, swap32(entries.idx) };
+    struct FstEntry root = { 0, {0}, {swap32(entries.idx)} };
     _esetid(&root, FST_TDIR, 0);
     fseek(fp, 0, SEEK_SET);
     fwrite(&root, 12, 1, fp);

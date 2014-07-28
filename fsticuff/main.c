@@ -3,16 +3,22 @@
 #include <stdio.h>
 
 void usage(int argc, char** argv) {
-    printf("Usage: %s DIR|INPUT [OPTION] [OUTPUT]\n", argv[0]);
-    printf("Creates gamecube fst file given directory DIR containing extracted iso\n");
-    printf("Optional OUTPUT file name (Default is fst.bin[.bak])\n\n");
-    printf("  -f    overwrite existing fst.bin (otherwise write fst.bin.bak\n");
+    char* name = argv[0];
+    int i=strlen(name);
+    while(i!=0 && name[i-1] != '/') { i--; }
+    name = name+i;
+    printf("Usage: %s DIR|INPUT [OPTION] [OUTPUT]\n", name);
+    printf(" Creates gamecube fst file given directory DIR containing extracted iso\n");
+    printf(" Optional OUTPUT file name (Default is fst.bin[.bak])\n");
+    printf("  -h    print this help\n");
+//    printf("  -f    overwrite existing fst.bin (otherwise write fst.bin.bak\n");
     printf("  -p    print INPUT info to stdout\n");
 }
 
 
 #define RF_PRINT 1<<0
 #define RF_FORCE 1<<1
+#define RF_HELP  1<<2
 
 int main(int argc, char** argv) {
     char* nargv[argc];
@@ -24,6 +30,7 @@ int main(int argc, char** argv) {
                 switch(argv[i][j]) {
                     case 'p': flags |= RF_PRINT; break;
                     case 'f': flags |= RF_FORCE; break;
+                    case 'h': flags |= RF_HELP; break;
                     default: break;
                 }
             }
@@ -37,6 +44,9 @@ int main(int argc, char** argv) {
         usage(argc, argv);
         return 0;
     }
+
+    if(flags & RF_HELP)
+        usage(argc, argv);
 
     if(flags & RF_PRINT) {
         print_fst(nargv[1]);
