@@ -13,7 +13,8 @@
 //  0x20 aligned, like file sizes, but some files are pushed for no
 //  apparent reason.
 //const int _initial_off = 0x45e540; 
-const int _initial_off = 0x45d640; 
+const int _initial_off = 0x471000;
+//const int _initial_off = 0x21e79800;
 
 // swap functions
 int swap32(int in) {
@@ -220,6 +221,7 @@ int generate_fst(char* gamedir, char* fileout) {
     struct IdxOff entries = { 1, _initial_off };
     struct Alignment alignments[] = {
         { "root/*.dat", 0x8000 },
+        { "root/*.thp", 0x4 },
         { 0 , 0}
     };
     entries = stat_dir(gamedir, fp, entries, 0, alignments, &strtab);
