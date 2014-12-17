@@ -39,8 +39,8 @@ struct FstEntry {
     };
 };
 
-int _ename(struct FstEntry e) { return swap32(e.id) & 0x00ffffff; }
-int _etype(struct FstEntry e) { return (swap32(e.id) & 0xff000000) >> 24; }
+int _ename(struct FstEntry* e) { return swap32(e->id) & 0x00ffffff; }
+int _etype(struct FstEntry* e) { return (swap32(e->id) & 0xff000000) >> 24; }
 struct FstEntry* _esetid(struct FstEntry* dest, int t, int s_idx) {
     dest->id = swap32(((t & 0xff) << 24) | (s_idx & 0x00ffffff));
     return dest;
@@ -263,8 +263,8 @@ void print_fst(char* fst) {
     }
     struct FstEntry entry = {0};
     fread(&entry, 12, 1, fp);
-    if(_etype(entry) != FST_TDIR 
-            || _ename(entry) != 0
+    if(_etype(&entry) != FST_TDIR 
+            || _ename(&entry) != 0
             || entry.file_off != 0) {
         printf("Error: %s is not an fst file (incorrect root)\n", fst);
         return;
@@ -290,12 +290,12 @@ void print_fst(char* fst) {
     for(int i = 1; i < entries; i++) {
         fread(&entry, 12, 1, fp);
         printf( "%s %8x %8x %8x %s\n", 
-                (_etype(entry) == FST_TDIR)?"d":"f",
+                (_etype(&entry) == FST_TDIR)?"d":"f",
                 swap32(entry.file_off),
                 swap32(entry.file_length),
                 swap32(entry.file_off) - swap32(last.file_off) - swap32(last.file_length),
-                strtab + _ename(entry));
-        if(_etype(entry) == FST_TFILE)
+                strtab + _ename(&entry));
+        if(_etype(&entry) == FST_TFILE)
             last = entry;
     }
 

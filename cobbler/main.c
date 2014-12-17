@@ -1,6 +1,7 @@
 #include "fsticuff.h"
 #include <string.h>
 #include <stdio.h>
+#include <errno.h>
 
 void usage(int argc, char** argv) {
     char* name = argv[0];
@@ -11,7 +12,7 @@ void usage(int argc, char** argv) {
     printf(" Creates gamecube fst file given directory DIR containing extracted iso\n");
     printf(" Optional OUTPUT file name (Default is fst.bin[.bak])\n");
     printf("  -h    print this help\n");
-//    printf("  -f    overwrite existing fst.bin (otherwise write fst.bin.bak\n");
+    printf("  -f    overwrite existing fst.bin (otherwise write fst.bin.bak\n");
     printf("  -p    print INPUT info to stdout\n");
 }
 

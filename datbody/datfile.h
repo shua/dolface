@@ -3,13 +3,14 @@
 
 #define DECLARE(type) \
 struct type##_t; \
+struct type##_bt; \
 typedef struct type##_t type; \
 extern const int type##bufsize; \
 void* serialize##type(void*, const type*); \
 type* deserialize##type(type*, void*); \
 void print##type(type*); \
-int fread##type(type*, FILE*); \
-int fwrite##type(const type*, FILE*); 
+int read##type(type*, FILE*); \
+dword write##type(const type*, FILE*); 
 
 DECLARE(DatHeader)
 DECLARE(RootNode)
@@ -29,6 +30,8 @@ DECLARE(DisplayList)
 #include<stdio.h>
 #include<stdint.h>
 
+#define perr(x, ...) fprintf(stderr, "Error: " x ": %s:%u\n", ##__VA_ARGS__, __FILE__, __LINE__)
+
 typedef uint32_t dword;
 typedef uint16_t dhalf;
 typedef uint8_t  dbyte;
@@ -45,31 +48,19 @@ typedef union {
 
 #define DEF_field(type, name)       type name;
 #define DEF_array(type, name, num)  type name[num];
-#define DEF_offset(type, name)      dword _##name##off;
+#define DEF_offset(type, name)      type* name;
 
-#define PTR_field(type, name)
-#define PTR_array(type, name, num)
-#define PTR_offset(type, name)      type* name;
+#define DEFB_field(type, name)      DEF_field(type, name)
+#define DEFB_array(type, name, num) DEF_array(type, name, num)
+#define DEFB_offset(type, name)     dword name;
 
-#define SER_field(type, name)       type* name##ptr = (type*)cbuf; *name##ptr = swap##type(src->name); cbuf+=sizeof(type);
-#define SER_array(type, name, num)  \
-    type* name##ptr; \
-    FORIDX(num) { \
-        name##ptr = (type*)cbuf; \
-        *name##ptr = swap##type(src->name[_i]); \
-        cbuf+=sizeof(type); \
-    }
-#define SER_offset(type, name) \
-    dword* name##ptr = (dword*)cbuf; \
-    *name##ptr = swapdword(*(dword*)&(src->_##name##off)); \
-    cbuf+=sizeof(dword);
+#define SER_field(type, name)       buf->name = swap##type(src->name);
+#define SER_array(type, name, num)  FORIDX(num) { buf->name[_i] = swap##type(src->name[_i]); }
+#define SER_offset(type, name)
 
-#define DES_field(type, name)       dst->name = swap##type(*((type*)cbuf)); cbuf+=sizeof(type);
-#define DES_array(type, name, num)  FORIDX(num) { dst->name[_i] = swap##type(*((type*)cbuf)); cbuf += sizeof(type); }
-#define DES_offset(type, name) \
-    dword name##tmp = swapdword(*((dword*)cbuf)); \
-    dst->_##name##off = (void*)name##tmp; \
-    cbuf+=sizeof(dword);
+#define DES_field(type, name)       dst->name = swap##type(buf->name);
+#define DES_array(type, name, num)  FORIDX(num) { dst->name[_i] = swap##type(buf->name[_i]); }
+#define DES_offset(type, name)      dst->name = (type*)swapdword(buf->name);
 
 #define PRNT_field(type, name)      printf("%10s %10s %8x " FMT_##type "\n", #type, #name, src->name, src->name);
 #define PRNT_array(type, name, num) \
@@ -89,35 +80,52 @@ typedef union {
 #define READ_field(type, name)
 #define READ_array(type, name, num)
 #define READ_offset(type, name)     \
-    if(dst->_##name##off) { \
+    if(dst->name) { \
+        dword offset = (dword)dst->name; \
         dst->name = malloc(sizeof(type)); \
-        fseek(dst->_##name##off + 0x20, "SEEK_SET"); \
-        dst->name->_offset = dst->_##name##off; \
-        fread##type(dst->name, fp); \
+        fseek(fp, offset + DatHeaderbufsize, SEEK_SET); \
+        if(!read##type(dst->name, fp)) { \
+            free(dst->name); \
+            dst->name = NULL; \
+        } \
     }
 
-#define RECF_field(type, name)
-#define RECF_array(type, name, num)
-#define RECF_offset(type, name)     _recfun##type(src->name, recf); recf(src->name);
+#define WRIT_field(type, name)
+#define WRIT_array(type, name, num)
+#define WRIT_offset(type, name) \
+    if(src->name) { \
+        buf->name = write##type(src->name, fp, header); \
+        _storeoffset(header, bufoff+offsetof(buf, buf->name)); \
+    }
+
+#define DSTR_field(type, name)
+#define DSTR_array(type, name, num)
+#define DSTR_offset(type, name) \
+    if(ptr->name) { \
+        destroy##type(ptr->name); \
+        free(ptr->name); \
+    }
+static inline void destroyvoid(void* ptr) {}
 
 #define DEFINE(type) \
 struct type##_t { \
     X##type(XDEF) \
-    dword _offset; \
-    X##type(XPTR) \
 }; \
-const int type##bufsize = offsetof(struct type##_t, _offset);
+struct type##_bt { \
+    X##type(XDEFB) \
+};\
+const int type##bufsize = sizeof(type##_bt);
 
 #define SERIALIZE(type) \
 void* serialize##type(void* dst, const type* src) { \
-    void* cbuf = dst; \
+    struct type##_bt* buf = dst; \
     X##type(XSER) \
     return dst; \
 }
 
 #define DESERIALIZE(type) \
 type* deserialize##type(type* dst, void* src) { \
-    void* cbuf = src; \
+    struct type##_bt* = src; \
     X##type(XDES) \
     return dst; \
 }
@@ -129,38 +137,44 @@ void print##type(type* src) { \
 }
 
 #define READ(type) \
-int fread##type(type* dst, FILE* fp) { \
-    char cbuf[type##bufsize]; \
-    if(fread(cbuf, type##bufsize, 1, fp) != 1) { \
-        fprintf(stderr, "Error reading " #type " into buffer\n"); \
+int read##type(type* dst, FILE* fp) { \
+    struct type##_bt buf; \
+    if(fread(&buf, type##bufsize, 1, fp) != 1) { \
+        perr("reading " #type " into buffer"); \
         return 0; \
     } \
-    deserialize##type(dst, cbuf); \
+    deserialize##type(dst, &buf); \
     X##type(XREAD) \
     return 1; \
 }
 
 #define WRITE(type) \
-int fwrite##type(const type* src, FILE* fp) { \
+dword write##type(const type* src, FILE* fp, const DatHeader* header) { \
+    struct type##_bt buf; \
+    serialize##type(&buf, src); \
     X##type(XWRIT) \
+    dword bufoff = ftell(fp) - DatHeaderbufsize; \
+    if(!fwrite(buf, type##bufsize, 1, fp)) { \
+        perr("writing " #type "to file"); \
+        return 0; \
+    } \
+    header->datasz += type##bufsize; \
+    return swapdword(bufoff); \
 }
-// Probably just going to serialize and write buffer
 
-#define PTR_UTIL(type) \
-void _recfun##type(const type* src, void (*fun)(void*)) { X##type(XRECF) } \
-dword countoffsets##type(const type* src) { return 0+ X##type(XCOFF) 0; } \
-dword layoutoffsets##type(const type* src, dword initial, ) { \
-    \
+#define DESTROY(type) \
+void destroy##type(const type* ptr) { \
+    X##type(XDSTR) \
 }
 
 #define XDEF(x) DEF_##x
-#define XPTR(x) PTR_##x
+#define XDEFB(x) DEFB_##x
 #define XSER(x) SER_##x
 #define XDES(x) DES_##x
 #define XPRNT(x) PRNT_##x
 #define XREAD(x) READ_##x
-#define XWRIT(x)
-#define XRECF(x) RECF_##x
+#define XWRIT(x) WRIT_##x
+#define XDSTR(x) DSTR_##x
 
 #define swap32(x) ( \
     ((x) & 0xff000000) >> 24 | ((x) & 0xff0000) >> 8 | \
@@ -175,17 +189,15 @@ static inline dbyte swapdbyte(dbyte src) { return src; }
 static inline float swapfloat(float src) { uint32_t tmp = *((uint32_t*)&src); tmp = swap32(tmp); return *((float*)&tmp); }
 static inline floatxyz swapfloatxyz(floatxyz src) { floatxyz tmp; swaparray(float, 3, tmp.m, src.m) return tmp; }
 
-// -- DatHeader --
+static inline void _storeoffset(const DatHeader* header, dword offset) {
+    if(header->reltnum == header->reltable)
+        header->reltable = realloc(header->reltable,  header->reltable[0]*=2);
+    if(table)
+        header->reltable[header->reltnum++] = offset;
+}
 
-#define XDatHeader(_) \
-_(field)    (dword, filesz) \
-_(field)    (dword, datasz) \
-_(field)    (dword, reltnum) \
-_(field)    (dword, rootnum) \
-_(field)    (dword, srootnum) \
-_(field)    (dword, unknown14) \
-_(field)    (dword, unknown18) \
-_(field)    (dword, unknown1c)
+#include<datxdef.h>
+// -- DatHeader --
 
 typedef struct DatHeader_t {
     dword filesz;
@@ -198,8 +210,9 @@ typedef struct DatHeader_t {
     dword unknown1c;
     RootNode* rootnodes;
     RootNode* srootnodes;
-    dword*  relocationtable;
+    dword*  reltable;
     char* stringtable;
+    dword stringnum;
 } DatHeader;
 const int DatHeaderbufsize = 0x20;
 
@@ -209,32 +222,76 @@ DESERIALIZE(DatHeader)
 
 PRINT(DatHeader)
 
-int fread(DatHeader* dst, FILE* fp) {
-    fseek(0, "SEEK_SET");
-    if(fread(dst, DatHeaderbufsize, 1, fp) != 1) {
-        fprintf(stderr, "Error reading DatHeader into buffer\n");
+int readDatHeader(DatHeader* dst, FILE* fp) {
+    rewind(fp);
+    if(fread(&dst, DatHeaderbufsize, 1, fp) != 1) {
+        perr("reading DatHeader into buffer");
         return 0;
     }
     deserializeDatHeader(dst, dst);
+    
     dst->rootnodes = malloc(sizeof(RootNode) * dst->rootnum);
+    readRootNode(dst->rootnodes, fp, dst);
     dst->srootnodes = malloc(sizeof(RootNode) * dst->srootnum);
-    dst->relocationtable = malloc(sizeof(dword) * dst->reltnum);
-    dst->stringtable = malloc(dst->filesz - (
+    readRootNode(dst->srootnodes, fp, dst);
+    
+    dst->reltable = malloc(sizeof(dword) * dst->reltnum);
+    if(fread(dst->reltable, sizeof(dword) * dst->reltnum, 1, fp) != 1) {
+        perr("reading relocation table");
+    }
+
+    int strtablesz =(dst->filesz - (
             dst->datasz + (dst->rootnum + dst->srootnum) * RootNodebufsize +
             dst->reltnum * sizeof(dword)));
-    fseek(dst->datasz, "SEEK_CUR");
+    dst->stringtable = malloc(strtablesz);
+    if(fread(dst->stringtable, strtablesz, 1, fp) != 1) {
+        perr("reading string table");
+    }
+}
 
+int writeDatHeader(DatHeader* src, FILE* fp) {
+    fseek(fp, DatHeaderbufsize, SEEK_SET);
+    if(src->reltable) free(src->reltable);
+    src->reltnum = 1;
+    src->reltable = malloc(1024);
+    src->reltable[0] = 1024;
 
-    error:
+    struct RootNode_bt rootbuf[src->rootnum+src->srootnum];
+    for(int ri=0; ri<src->rootnum; ++ri) {
+        writeRootNode(src->rootnodes[ri], fp, src, rootbuf);
+    }
+    for(int ri=0; ri<src->srootnum; ++ri) {
+        writeRootNode(src->srootnodes[ri], fp, src, rootbuf);
+    }
+    
+    src->filesz = DatHeaderbufsize + src->datasz + 
+        (src->rootnum + src->srootnum)*RootNodebufsize +
+        (src->reltnum)*sizeof(dword) + src->stringnum;
+    fseek(src->datasz+DatHeaderbufsize, SEEK_SET);
+    if(!fwrite(src->reltable+1, sizeof(dword), src->reltnum, fp)) {
+    fwrite(src->stringtable, src->stringnum, 1, fp);
+    src->filesz = ftell(fp);
+    serializeDatHeader(src, src);
+    rewind(fp);
+    fwrite(src, DatHeaderbufsize, 1, fp);
 }
 
 // -- RootNode --
 
-#define XRootNode(_) \
-_(offset)   (void, child) \
-_(field)    (dword, name)
+struct RootNode_bt {
+    dword child;
+    dword name;
+};
+const int RootNodebufsize = sizeof(struct RootNode_bt);
 
-struct RootNode_t {
+enum RootChildType {
+    RCT_UNKNOWN,
+    RCT_JOINT,
+    RCT_MESH,
+    RCT_COL
+};
+
+typedef struct RootNode_t {
     union {
         void*       child;
         Joint*      joint;
@@ -242,28 +299,85 @@ struct RootNode_t {
         Collision*  collision;
     };
     dword name;
-};
+    RootChildType rct;
+} RootNode;
 
 SERIALIZE(RootNode)
 
 DESERIALIZE(RootNode)
 
-// TODO custom print, that prints correct child type and name
-PRINT(RootNode)
+void printRootNode(RootNode* src) {
+    printf("RootNode \n");
+    switch(src->rct) {
+        case RCT_JOINT: printf("%10s %10s", "Joint",     "joint");     break;
+        case RCT_MESH:  printf("%10s %10s", "Mesh",      "mesh");      break;
+        case RCT_COL:   printf("%10s %10s", "Collision", "collision"); break;
+        default:        printf("%10s %10s", "UNKNOWN",   "child");     break;
+    }
+    printf("%8x\n", (unsigned int)src->child);
+}
+
+int readRootNode(RootNode* dst, FILE* fp, const DatHeader* header) {
+    // being real cute
+    // read the table of RootNode_bt's into the end of a table of RootNode_t's
+    // since RootNode_t's are bigger, there shouldn't be an overlap, and if I deserialize
+    // one at a time, it should be alright
+    //   RRRR --BB bbbb    RRRR was read from BB, next will be
+    //   rrrr RRRR BBbb    last four 'bytes' will be read from last two 'bytes'
+    struct RootNode_bt *end;
+    struct RootNode_bt *buf;
+    struct RootNode_bt singlenode = {0};
+    if(dst == header->rootnodes) {
+        end = ((struct RootNode_bt*)(header->rootnodes + header->rootnum));
+        buf = end - header->rootnum;
+    } else if(dst == header->srootnodes) {
+        end = ((struct RootNode_bt*)(header->srootnodes + header->srootnum));
+        buf = end - header->srootnum;
+    } else {
+        printf("Info: readRootNode not called on rootnodes or srootnodes\n");
+        buf = &singlenode;
+        end = buf + 1;
+    }
+    if(fread(buf, RootNodebufsize, end-buf, fp) != end-buf) {
+        perr("reading RootNode into buffer");
+        return 0;
+    }
+
+    while(buf != end) {
+        deserializeRootNode(dst, buf);
+
+        // TODO determine child type
+        dst->rct = RCT_JOINT;
+
+        switch(dst->rct) {
+            case RCT_JOINT: READ_offset(Joint,      joint)     break;
+            case RCT_MESH:  READ_offset(Mesh,       mesh)      break;
+            case RCT_COL:   READ_offset(Collision,  collision) break;
+            default: perr("unknown root child type %d", dst->rct);
+        }
+
+        ++dst;
+        ++buf;
+    }
+    return 1;
+}
+
+void writeRootNode(const RootNode* src, FILE* fp, const DatHeader* header, struct RootNode_bt* buf) {
+    switch(src->rct) {
+        case RCT_JOINT: src->child = (void*)writeJoint(src->joint, fp, header); break;
+        case RCT_MESH:  src->child = (void*)writeMesh(src->mesh, fp, header); break;
+        case RCT_COL:   src->child = (void*)writeCollision(src->collision, fp, header); break;
+        default: perr("unknown root child type %d", dst->rct);
+    }
+    // have to defer storing the offsets until we know where buf will be written
+    serializeRootNode(buf, src);
+}
+
+void destroyRootNode(const RootNode* ptr) {
+    if(
+}
 
 // -- Joint --
-
-#define XJoint(_) \
-_(field)    (dword, unknown) \
-_(field)    (dword, flags) \
-_(offset)   (Joint, child) \
-_(offset)   (Joint, next) \
-_(offset)   (JointData, data) \
-_(field)    (floatxyz, rotation) \
-_(field)    (floatxyz, scale) \
-_(field)    (floatxyz, translation) \
-_(offset)   (void, transform) \
-_(field)    (dword, padding)
 
 DEFINE(Joint)
 
@@ -273,13 +387,13 @@ DESERIALIZE(Joint)
 
 PRINT(Joint)
 
-// -- JointData --
+READ(Joint)
 
-#define XJointData(_) \
-_(field)    (dword, unknown) \
-_(offset)   (JointData, next) \
-_(offset)   (Material, material) \
-_(offset)   (Mesh, mesh)
+WRITE(Joint)
+
+DESTROY(Joint)
+
+// -- JointData --
 
 DEFINE(JointData)
 
@@ -289,16 +403,13 @@ DESERIALIZE(JointData)
 
 PRINT(JointData)
 
-// -- Mesh --
+READ(JointData)
 
-#define XMesh(_) \
-_(field)    (dword, unknown) \
-_(offset)   (Mesh, next) \
-_(offset)   (void, verts) \
-_(field)    (dhalf, flags) \
-_(field)    (dhalf, displaynum) \
-_(offset)   (DisplayList, display) \
-_(offset)   (void, weight)
+WRITE(JointData)
+
+DESTROY(JointData)
+
+// -- Mesh --
 
 DEFINE(Mesh)
 
@@ -308,15 +419,19 @@ DESERIALIZE(Mesh)
 
 PRINT(Mesh)
 
-// -- Material --
+int readMesh(Mesh* dst, FILE* fp) {
+    printf("Info: reading image data not yet implemented\n");
+    return 0;
+}
 
-#define XMaterial(_) \
-_(field)    (dword, unknown) \
-_(field)    (dword, flags) \
-_(offset)   (Texture, texture) \
-_(offset)   (Color, color) \
-_(field)    (dword, unknown10) \
-_(field)    (dword, unknown14)
+dword writeMesh(const Mesh* src, FILE* fp, const DatHeader* header) {
+    printf("Info: writing mesh data not yet implemented\n");
+    return 0;
+}
+
+DESTROY(Mesh)
+
+// -- Material --
 
 DEFINE(Material)
 
@@ -326,28 +441,13 @@ DESERIALIZE(Material)
 
 PRINT(Material)
 
-// -- Texture --
+READ(Material)
 
-#define XTexture(_) \
-_(field)    (dword, unknown) \
-_(offset)   (Texture, next) \
-_(field)    (dword, unknown08) \
-_(field)    (dword, unknown0c) \
-_(field)    (floatxyz, rotation) \
-_(field)    (floatxyz, scale) \
-_(field)    (floatxyz, translation) \
-_(field)    (dword, wraps) \
-_(field)    (dword, wrapt) \
-_(field)    (dbyte, scales) \
-_(field)    (dbyte, scalet) \
-_(field)    (dhalf, unknown3e) \
-_(field)    (dword, unknown40) \
-_(field)    (dword, unknown44) \
-_(field)    (dword, unknown48) \
-_(offset)   (Image, image) \
-_(offset)   (Palette, palette) \
-_(field)    (dword, unknown54) \
-_(field)    (dword, unknown58) \
+WRITE(Material)
+
+DESTROY(Mesh)
+
+// -- Texture --
 
 DEFINE(Texture)
 
@@ -356,6 +456,81 @@ SERIALIZE(Texture)
 DESERIALIZE(Texture)
 
 PRINT(Texture)
+
+READ(Texture)
+
+WRITE(Texture)
+
+DESTROY(Texture)
+
+// -- Color --
+
+DEFINE(Color)
+
+SERIALIZE(Color)
+
+DESERIALIZE(Color)
+
+PRINT(Color)
+
+READ(Color)
+
+WRITE(Color)
+
+DESTROY(Color)
+
+// -- Image --
+
+DEFINE(Image)
+
+SERIALIZE(Image)
+
+DESERIALIZE(Image)
+
+PRINT(Image)
+
+int readImage(Image* dst, FILE* fp) {
+    printf("Info: reading image data not yet implemented\n");
+    return 0;
+}
+
+dword writeImage(const Image* src, FILE* fp, const DatHeader* header) {
+    printf("Info: writing image data not yet implemented\n");
+    return 0;
+}
+
+DESTROY(Image)
+
+// -- Palette --
+
+DEFINE(Palette)
+
+SERIALIZE(Palette)
+
+DESERIALIZE(Palette)
+
+PRINT(Palette)
+
+int readPalette(Palette* dst, FILE* fp) {
+    printf("Info: reading palette data not yet implemented\n");
+    return 0;
+}
+
+dword writePalette(const Palette* src, FILE* fp, const DatHeader* header) {
+    printf("Info: writing palette data not yet implemented\n");
+    return 0;
+}
+
+DESTROY(Palette)
+
+#define UNDEF
+#include<datxdef.h>
+#undef UNDEF
+READ(Texture)
+
+WRITE(Texture)
+
+DESTROY(Texture)
 
 // -- Color --
 
@@ -374,6 +549,12 @@ DESERIALIZE(Color)
 
 PRINT(Color)
 
+READ(Color)
+
+WRITE(Color)
+
+DESTROY(Color)
+
 // -- Image --
 
 #define XImage(_) \
@@ -389,6 +570,18 @@ SERIALIZE(Image)
 DESERIALIZE(Image)
 
 PRINT(Image)
+
+int readImage(Image* dst, FILE* fp) {
+    printf("Info: reading image data not yet implemented\n");
+    return 0;
+}
+
+dword writeImage(const Image* src, FILE* fp, const DatHeader* header) {
+    printf("Info: writing image data not yet implemented\n");
+    return 0;
+}
+
+DESTROY(Image)
 
 // -- Palette --
 
@@ -406,6 +599,18 @@ SERIALIZE(Palette)
 DESERIALIZE(Palette)
 
 PRINT(Palette)
+
+int readPalette(Palette* dst, FILE* fp) {
+    printf("Info: reading palette data not yet implemented\n");
+    return 0;
+}
+
+dword writePalette(const Palette* src, FILE* fp, const DatHeader* header) {
+    printf("Info: writing palette data not yet implemented\n");
+    return 0;
+}
+
+DESTROY(Palette)
 
 #endif // DATFILE_IMPLEMENT
 #endif // DATFILE_H
