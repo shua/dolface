@@ -127,7 +127,7 @@ void pdstruct(DatStructVar* dvp, uint8_t* ptr) {
 
 int main(int argc, char** argv) {
     char* file_s = NULL, *type_s = NULL, *off_s = NULL;
-    enum { ModeRelt, ModeBody, ModeRoot, ModeHdr, ModeOffRelt, ModeOffBody, ModeSize };
+    enum { ModeBody, ModeRoot, ModeHdr, ModeOffRelt, ModeOffBody, ModeSize };
     uint32_t mode = ModeBody;
     int i;
 
@@ -144,7 +144,6 @@ int main(int argc, char** argv) {
             case 'o': if(argv[i][2] == 't')      mode = ModeOffRelt;
                       else if(argv[i][2] == 'b') mode = ModeOffBody;
                       break;
-            case 't': mode = ModeRelt; break;
             case 'z': mode = ModeSize; file_s = ""; break;
             default:  printf("Unrecognized option %s\n", argv[i]);
                       usage();
@@ -161,7 +160,6 @@ int main(int argc, char** argv) {
     definit();
     
     switch(mode) {
-    case ModeRelt: return pfrelt(file_s);
     case ModeBody: return pfbody(file_s, type_s, off_s);
     case ModeRoot: return pfroot(file_s);
     case ModeHdr:  return pfstruct(file_s, DatHdr, 0);
@@ -267,27 +265,6 @@ int travdv(uint8_t* buf, offname* ons, DatStructVar* dvp) {
     return i;
 }
 
-int pfrelt(char* file_s) {
-    uint32_t i, hdr[3];
-    uint32_t* buf;
-    FILE* file;
-
-    file = fopen(file_s, "r");
-    if(!file) return 2;
-
-    fread(hdr, sizeof(uint32_t), 3, file);
-    for(i=0; i<3; ++i) hdr[i] = be32toh(hdr[i]);
-    buf = malloc(hdr[2] * sizeof(uint32_t));
-    fseek(file, 0x20 + hdr[1], SEEK_SET);
-    fread(buf, sizeof(uint32_t), hdr[2], file);
-    for(i=0; i<hdr[2]; ++i)
-        printf("%08x\n", be32toh(buf[i]));
-    
-    free(buf);
-    fclose(file);
-    return 0;
-}
-
 int pfroot(char* file_s) {
     uint32_t i, body, root, sroot, reln;
     uint8_t* buf;
@@ -313,30 +290,6 @@ int pfroot(char* file_s) {
     printf("\n");
     for(; i < (root+sroot); ++i)
         pdstruct(ddefs[DatRoot].vars, buf+(i*ddefs[DatRoot].size));
-
-    free(buf);
-    fclose(file);
-    return 0;
-}
-
-int pfstrings(char* file_s) {
-    uint32_t i, hdr[5], size;
-    char* buf;
-    FILE* file;
-
-    file = fopen(file_s, "r");
-    if(!file) return 2;
-
-    fread(hdr, sizeof(uint32_t), 5, file);
-    for(i=0; i<5; ++i) hdr[i] = be32toh(hdr[i]);
-    size = hdr[0] - (0x20+hdr[1]+(hdr[2]*4)+((hdr[3]+hdr[4])*ddefs[DatRoot].size));
-    buf = malloc(size + 1);
-    fseek(file, hdr[0] - size, SEEK_SET);
-    fread(buf, size, 1, file);
-    for(i=0; i < size; ++i) {
-        if(buf[i])  putchar(buf[i]);
-        else        putchar('\n');
-    }
 
     free(buf);
     fclose(file);
