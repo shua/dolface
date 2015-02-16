@@ -9,21 +9,30 @@ enum {
  DatMaterial,
  DatColor,
  DatTexture,
+ DatTexUnk,
  DatImage,
  DatPalette,
  DatVertAr,
  DatDisplayList,
  DatHitBoxData,
  DatCollision,
+ DatMatAnimA,
+ DatMatAnimB,
+ DatMatAnimC,
+ DatMatAnimCdh,
+ DatMatAnimCd,
+ DatMatAnimD,
+ DatMatAnimDd,
+ DatMatAnimDdd,
  DatLast
 };
 
 DatStructVar hvars[] = {
-    { AtWord,   "filesz",   { .ui = PHEX } },
-    { AtWord,   "datasz",   { .ui = PHEX } },
-    { AtWord,   "reltnum",  0 },
-    { AtWord,   "rootnum",  0 },
-    { AtWord,   "srootnum", 0 },
+    { AtWord,   "filesz",   0 },
+    { AtWord,   "datasz",   0 },
+    { AtWord,   "reltnum",  { .ui = PDEC } },
+    { AtWord,   "rootnum",  { .ui = PDEC } },
+    { AtWord,   "srootnum", { .ui = PDEC } },
     { AtWord,   0,          0 },
     { AtWord,   0,          0 },
     { AtWord,   0,          0 },
@@ -43,7 +52,7 @@ DatStructVar xyzsub[] = {
 };
 DatStructVar jvars[] = {
     { AtWord,   0,          0 },
-    { AtWord,   "flags",    { .ui = PHEX } },
+    { AtWord,   "flags",    0 },
     { AtOff,    "child",    { .ui = DatJoint } },
     { AtOff,    "next",     { .ui = DatJoint } },
     { AtOff,    "data",     { .ui = DatJointData } },
@@ -116,7 +125,18 @@ DatStructVar tvars[] = {
     { AtOff,    "image",    { .ui = DatImage } },
     { AtOff,    "palette",  { .ui = DatPalette } },
     { AtWord,   0,          0 },
-    { AtOff,    0,          0 },
+    { AtOff,    "texunk",  { .ui =  DatTexUnk } },
+    0
+};
+DatStructVar tuvars[] = {
+    { AtWord,   0,          0 },
+    { AtWord,   "101",      0 },
+    { AtWord,   "8580080f", 0 },
+    { AtWord,   "07070707", 0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
     0
 };
 DatStructVar ivars[] = {
@@ -169,14 +189,74 @@ DatStructVar cnsub[] = {
 };
 DatStructVar cnvars[] = {
     { AtOff,    "vertices", { .ui = DatVertAr } },
-    { AtWord,   "vertn",    0 },
+    { AtWord,   "vertn",    { .ui = PDEC } },
     { AtOff,    "indices",  0 },
-    { AtWord,   "indn",     0 },
+    { AtWord,   "indn",     { .ui = PDEC } },
     { AtSub,    "indextable", { .sv = cnsub } },
     { AtOff,    0,          0 },
     { AtWord,   0,          0 },
     0
 };
+
+DatStructVar maavars[] = {
+    { AtOff,    "next",     { .ui = DatMatAnimA } },
+    { AtOff,    "child",    0 },
+    { AtOff,    "MAB",      { .ui = DatMatAnimB } },
+    0
+};
+DatStructVar mabvars[] = {
+    { AtOff,    "next",     { .ui = DatMatAnimB } },
+    { AtOff,    0,          0 },
+    { AtOff,    "MAC",      { .ui = DatMatAnimC } },
+    { AtOff,    0,          0 },
+    0
+};
+DatStructVar macvars[] = {
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtOff,    "MAD",      { .ui = DatMatAnimD } },
+    { AtOff,    "datahdr",  { .ui = DatMatAnimCdh } },
+    { AtWord,   0,          0 },
+    { AtOff,    "animdata", 0 },
+    0
+};
+DatStructVar macdhvars[] = {
+    { AtOff,    "a",        { .ui = DatMatAnimCd } },
+    { AtOff,    "b",        { .ui = DatMatAnimCd } },
+    { AtOff,    "c",        { .ui = DatMatAnimCd } },
+    { AtOff,    "d",        { .ui = DatMatAnimCd } },
+    0
+};
+DatStructVar macdvars[] = {
+    { AtOff,    "animdata", 0 },
+    { AtWord,   "01000100", 0 },
+    { AtWord,   "e",        0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    0
+};
+DatStructVar madvars[] = {
+    { AtWord,   0,          0 },
+    { AtWord,   "40a00000", 0 },
+    { AtOff,    "data",     0 },
+    0
+};
+DatStructVar maddvars[] = { 
+    { AtWord,   0,          0 },
+    { AtWord,   "b",        0 },
+    { AtWord,   0,          0 },
+    { AtWord,   "1860000",  0 },
+    { AtOff,    "data",     0 },
+    0
+};
+DatStructVar madddvars[] = {
+    { AtWord,   "41000140", 0 },
+    { AtWord,   "18001c0",  0 },
+    { AtWord,   "2c00000",  0 },
+    0
+};
+
 
 DatStruct ddefs[] = {
     [DatNULL] =     { "Unknown", 0, 0 },
@@ -188,10 +268,22 @@ DatStruct ddefs[] = {
     [DatMaterial] = { "Material", 0, mtvars},
     [DatColor] =    { "Color", 0, cvars},
     [DatTexture] =  { "Texture", 0, tvars},
+    [DatTexUnk] =   { "TextureUnk", 0, tuvars},
     [DatImage] =    { "Image", 0, ivars},
     [DatPalette] =  { "Palette", 0, pvars},
     [DatVertAr] =   { "VertArray", 0, vvars},
     [DatDisplayList] = { "DisplayList", 0, dvars},
     [DatHitBoxData] = { "HitBoxData", 0, hbvars},
     [DatCollision] = { "Collision", 0, cnvars},
+
+    [DatMatAnimA] = { "MatAnimA", 0, maavars},
+    [DatMatAnimB] = { "MatAnimB", 0, mabvars},
+    [DatMatAnimC] = { "MatAnimC", 0, macvars},
+    [DatMatAnimCdh] = { "MatAnimCdh", 0, macdhvars},
+    [DatMatAnimCd] = { "MatAnimCd", 0, macdvars},
+    [DatMatAnimD] = { "MatAnimD", 0, madvars},
+    [DatMatAnimDd] = { "MatAnimDd", 0, maddvars},
+    [DatMatAnimDdd] = { "MatAnimDdd", 0, madddvars},
+
+    [DatLast] = { 0, 0, 0 },
 };
