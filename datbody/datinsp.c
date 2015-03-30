@@ -9,18 +9,18 @@
 
 void usage(char* cmd) {
     printf(
-    "Usage: %s DATFILE OFF NUM SIZE\n"
+    "Usage: %s DATFILE OFF NUM\n"
     "  OFF is the offset into a melee data file's body\n"
-    "  NUM is the number of elements\n"
-    "  SIZE is the size of elements in bytes (4,2,or 1)\n",
+    "  NUM is the number of elements\n",
     cmd);
 }
 
 int main(int argc, char** argv) {
     uint8_t* c, *buf;
-    int off, num, size;
+    int off, num, val;
+    float valf;
     FILE* fp;
-    if(argc < 5) usage(argv[0]);
+    if(argc < 4) usage(argv[0]);
 
     if(!(fp = fopen(argv[1], "r"))) {
         fprintf(stderr, "Error attempting to open %s\n", argv[1]);
@@ -29,17 +29,19 @@ int main(int argc, char** argv) {
 
     sscanf(argv[2], "%x", &off);
     sscanf(argv[3], "%x", &num);
-    sscanf(argv[4], "%x", &size);
-    c = buf = malloc(num*size);
+    c = buf = malloc(num*4);
     fseek(fp, off+HDRSZ, SEEK_SET);
-    num = fread(c, size, num, fp);
+    num = fread(c, 4, num, fp);
     while(num-->0) {
         printf("%08x ", off);
-        switch(size) {
-            case 4: printf("%8x\n", be32toh(*(uint32_t*)c)); c+=4; off+=4; break;
-            case 2: printf("%4x\n", be16toh(*(uint32_t*)c)); c+=2; off+=2; break;
-            case 1: printf("%2x\n", *c); c+=1; off+=1; break;
-        }
+        val = be32toh(*(uint32_t*)c);
+        valf = *(float*)&val;
+        printf("%8x", val);
+        if(valf >= 100.f || valf <= 0.00000001f)
+            printf(" %+10E\n", valf);
+        else
+            printf(" %+2.8f\n", valf);
+        c+=4; off+=4;
     }
 
     free(buf);
