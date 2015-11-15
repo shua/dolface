@@ -1,15 +1,19 @@
 
 /* -- Function Declarations -- */
 static void _PDATM(DatStructVar*, uint8_t*);
-static void PDGEN(DatStructVar*, uint8_t*, DatStructVar);
-static void PDROOT(DatStructVar*, uint8_t*, DatStructVar);
-static void PDVERTATTR(DatStructVar*, uint8_t*, DatStructVar);
+static void PDGEN(int, DatStructVar*, uint8_t*, DatStructVar);
+static void PDROOT(int, DatStructVar*, uint8_t*, DatStructVar);
+static void PDVERTATTR(int, DatStructVar*, uint8_t*, DatStructVar);
 static DatStructVar  ROOTTYPE(uint32_t*, char*);
 
-static int TDGEN(DatStructVar*, uint8_t*, offtype*);
-static int TDMAC(DatStructVar*, uint8_t*, offtype*);
-static int TDMHE(DatStructVar*, uint8_t*, offtype*);
-static int TDVERTATTR(DatStructVar*, uint8_t*, offtype*);
+static int TDGEN(DatStructVar*, uint8_t*, offtype*, offtype*);
+static int TDLIST(DatStructVar*, uint8_t*, offtype*, offtype*);
+static int TDMAC(DatStructVar*, uint8_t*, offtype*, offtype*);
+static int TDMHE(DatStructVar*, uint8_t*, offtype*, offtype*);
+static int TDVERTATTR(DatStructVar*, uint8_t*, offtype*, offtype*);
+static int TDPREMDF(DatStructVar*, uint8_t*, offtype*, offtype*);
+static int TDMDF(DatStructVar*, uint8_t*, offtype*, offtype*);
+static int TDJOINT(DatStructVar*, uint8_t*, offtype*, offtype*);
 
 /* -- Type Declarations -- */
 /* DatHdr and DatRoot are special, everything else can be changed */
@@ -19,6 +23,8 @@ enum {
  DatRoot,
  DatJoint,
  DatJointData,
+ DatJointDataA,
+ DatJointDataAd,
  DatTransform,
  DatMesh,
  DatMaterial,
@@ -31,45 +37,85 @@ enum {
  DatPaletteData,
  DatVertAttr,
  DatVertData,
+ DatIndData,
  DatDisplayArr,
- DatWeightList,
+ DatWeightl,
  DatWeight,
  DatHitBoxData,
  DatCollision,
+ DatCollData,
  
  DatMatAnimA,
+ DatMatAnimAl,
  DatMatAnimB,
  DatMatAnimC,
  DatMatAnimCi,
  DatMatAnimCp,
  DatMatAnimD,
- DatMatAnimDd,
- DatMatAnimDdd,
- DatMatAnimAl,
+ DatMatAnimE,
+ DatMatAnimF,
 
  DatMapHeadA,
  DatMapHeadB,
  DatMapHeadC,
  DatMapHeadD,
  DatMapHeadE,
+ DatMapHeadF,
+ DatMapHeadFl,
+ DatMapHeadG,
+ DatMapHeadH,
+
  DatMapHeadJD,
- DatMapHeadHalf,
+ DatMapHalf,
+ DatMapHalfA,
  DatMapHeadAoN,
- DatMapHeadQnl,
- DatMapHeadQuin,
- DatMapHeadQna,
- DatMapHeadQnb,
- DatMapHeadQnc,
- DatMapHeadQnd,
- DatMapHeadQne,
+
+ DatMHAJointo,
+ DatMHAMPEo,
+ DatMHAMato,
+
+ DatMapQuinl,
+ DatMapQuin,
+ DatMapQuinA,
+ DatMapQuinB,
+ DatMapQuinC,
+ DatMapQuinD,
+ DatMapQuinE,
+ DatMapQuinF,
  DatMapPlitB,
  DatMapPlitBl,
  DatMapPlitC,
  DatMapPlitCa,
  DatMapPlitCb,
+ DatMapPlitD,
+ DatMapPlitE,
+ DatMapPtcl,
+ DatMapTexg,
+
+ DatMapDataFtr,
 
  DatGrP,
  DatGrPA,
+ DatQMS,
+ DatQMSl,
+ DatQMSA,
+ DatQMSB,
+ DatQMSC,
+ DatQMSCd,
+
+ DatItemData,
+ DatItemDatal,
+ DatItemDataA,
+ DatItemDataB,
+ DatItemDataC,
+ DatItemDataD,
+ DatItemDataE,
+ DatItemDataF,
+ DatItemDataG,
+ DatItemDataH,
+ DatYakumono,
+ DatYakuAll,
+
  DatLast
 };
 
@@ -99,7 +145,7 @@ DatStructVar xyzsub[] = {
 };
 DatStructVar jvars[] = {
     { AtWord,   0,          0 },
-    { AtWord,   "flags",    0 },
+    { AtWord,   "flags",    { .ui = PFLG } },
     { AtOff,    "child",    { .ui = DatJoint } },
     { AtOff,    "next",     { .ui = DatJoint } },
     { AtOff,    "data",     { .ui = DatJointData } },
@@ -115,6 +161,15 @@ DatStructVar jdvars[] = {
     { AtOff,    "next",     { .ui = DatJointData } },
     { AtOff,    "material", { .ui = DatMaterial } },
     { AtOff,    "mesh",     { .ui = DatMesh } },
+    0
+};
+DatStructVar jdavars[] = {
+    { AtWord,   "flags",    0 }, /* not sure */
+    { AtWord,   0,          0 },
+    { AtOff,    "data1",    { .ui = DatJointDataAd } },
+    { AtWord,   0,          0 },
+    { AtOff,    "data2",    { .ui = DatJointDataAd } },
+    { AtOff,    "data3",    { .ui = DatJointDataAd } },
     0
 };
 DatStructVar jtvars[] = {
@@ -136,15 +191,15 @@ DatStructVar mvars[] = {
     { AtWord,   0,          0 },
     { AtOff,    "next",     { .ui = DatMesh } },
     { AtOff,    "verts",    { .ui = DatVertAttr} },
-    { AtHalf,   "flags",    0 },
+    { AtHalf,   "flags",    { .ui = PFLG } },
     { AtHalf,   "displayn", { .ui = PSIZ } },
     { AtArr,    "display",  { .ui = DatDisplayArr } },
-    { AtList,   "weight",   { .ui = DatWeightList } },
+    { AtOff,    "weight",   { .ui = DatWeightl } },
     0
 };
 DatStructVar mtvars[] = {
     { AtWord,   0,          0 },
-    { AtWord,   "flags",    0 },
+    { AtWord,   "flags",    { .ui = PFLG } },
     { AtOff,    "texture",  { .ui = DatTexture } },
     { AtOff,    "color",    { .ui = DatColor } },
     { AtWord,   0,          0 },
@@ -237,7 +292,7 @@ DatStructVar dvars[] = {
     0
 };
 DatStructVar wlvars[] = {
-    { AtList,   "weight",   { .ui = DatWeight } },
+    { AtOff,    "weight",   { .ui = DatWeight } },
     0
 };
 DatStructVar wvars[] = {
@@ -262,13 +317,13 @@ DatStructVar cnsub[] = {
     0
 };
 DatStructVar cnvars[] = {
-    { AtOff,    "vertices", { .ui = DatVertAttr } },
+    { AtOff,    "vert",     { .ui = DatVertData } },
     { AtWord,   "vertn",    { .ui = PSIZ } },
-    { AtOff,    "indices",  0 },
+    { AtOff,    "ind",      { .ui = DatIndData } },
     { AtWord,   "indn",     { .ui = PSIZ } },
     { AtSub,    "indtable", { .sv = cnsub } },
-    { AtOff,    0,          0 },
-    { AtWord,   0,          0 },
+    { AtOff,    "colld",    { .ui = DatCollData } },
+    { AtWord,   "colldn",   { .ui = PSIZ } },
     0
 };
 
@@ -285,13 +340,13 @@ DatStructVar malvars[] = {
 };
 DatStructVar mabvars[] = {
     { AtOff,    "next",     { .ui = DatMatAnimB } },
-    { AtOff,    0,          0 },
+    { AtOff,    "MAD",      { .ui = DatMatAnimD } },
     { AtOff,    "MAC",      { .ui = DatMatAnimC } },
     { AtOff,    0,          0 },
     0
 };
 DatStructVar macvars[] = {
-    { AtWord,   0,          0 },
+    { AtOff,    "next",     { .ui = DatMatAnimC } },
     { AtWord,   0,          0 },
     { AtOff,    "MAD",      { .ui = DatMatAnimD } },
     { AtArr,    "MACi",     { .ui = DatMatAnimCi } },
@@ -311,22 +366,84 @@ DatStructVar macpvars[] = {
 DatStructVar madvars[] = {
     { AtWord,   0,          0 },
     { AtFloat,  "40a00000", 0 },
-    { AtOff,    "data",     { .ui = DatMatAnimDd } },
+    { AtOff,    "MAE",     { .ui = DatMatAnimE } },
     { AtWord,   0,          0 },
     0
 };
-DatStructVar maddvars[] = { 
-    { AtOff,    "next",     { .ui = DatMatAnimDd } },
-    { AtWord,   "b",        0 },
+DatStructVar maevars[] = { 
+    { AtOff,    "next",     { .ui = DatMatAnimE } },
+    { AtWord,   "MAFn",     { .ui= PSIZ } },
     { AtWord,   0,          0 },
-    { AtWord,   "1860000",  0 },
-    { AtOff,    "data",     { .ui = DatMatAnimDdd } },
+    { AtWord,   "flags",    0 }, /* not sure */
+    { AtOff,    "MAF",      { .ui = DatMatAnimF } },
     0
 };
-DatStructVar madddvars[] = {
-    { AtWord,   "41000140", 0 },
-    { AtWord,   "18001c0",  0 },
-    { AtWord,   "2c00000",  0 },
+DatStructVar mafvars[] = {
+    { AtByte,   0,          0 },
+    0
+};
+/* -- ItemData Vars -- */
+DatStructVar idvars[] = {
+    { AtWord,   "type",     0 },
+    { AtOff,    "IDA",      0 },
+    0
+};
+DatStructVar idlvars[] = {
+    { AtOff,    0,          { .ui = DatItemData } },
+    0
+};
+DatStructVar idavars[] = {
+    { AtOff,    "IDB",      { .ui = DatItemDataB } },
+    { AtOff,    "IDC",      { .ui = DatItemDataC } },
+    { AtOff,    "IDD",      { .ui = DatItemDataD } },
+    { AtOff,    "IDE",      { .ui = DatItemDataE } },
+    { AtOff,    "IDF",      { .ui = DatItemDataF } },
+    { AtWord,   0,          0 },
+    0
+};
+DatStructVar idcvars[] = {
+    { AtOff,    "next",     { .ui = DatItemDataC } },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    0
+};
+DatStructVar iddvars[] = {
+    { AtWord,   0,          0 },
+    { AtOff,    "IDG",      { .ui = DatItemDataG } },
+    0
+};
+DatStructVar idfvars[] = {
+    { AtOff,    "joint",    { .ui = DatJoint } },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    0
+};
+DatStructVar idgvars[] = {
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    0
+};
+DatStructVar idhvars[] = {
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
     0
 };
 
@@ -334,32 +451,39 @@ DatStructVar madddvars[] = {
 DatStructVar mhavars[] = {
     { AtArr,    "jointdf",  { .ui = DatMapHeadJD } },
     { AtWord,   "jointdfn", { .ui = PSIZ } },
-    { AtArr,    "b",        { .ui = DatMapHeadB } },
-    { AtWord,   "bn",       { .ui = PSIZ } },
-    { AtWord,   0,          0 },
-    { AtWord,   0,          0 },
+    { AtArr,    "MHB",      { .ui = DatMapHeadB } },
+    { AtWord,   "MHBn",     { .ui = PSIZ } },
+    { AtArr,    "jointdo",  { .ui = DatMHAJointo } },
+    { AtWord,   "jointdon", { .ui = PSIZ } },
     { AtArr,    "MHE",      { .ui = DatMapHeadE } },
     { AtWord,   "MHEn",     { .ui = PSIZ } },
-    { AtWord,   0,          0 },
-    { AtWord,   0,          0 },
+    { AtArr,    "MPEo",     { .ui = DatMHAMPEo } },
+    { AtWord,   "MPEon",    { .ui = PSIZ } },
+    { AtArr,    "mato",     { .ui = DatMHAMato } },
+    { AtWord,   "maton",    { .ui = PSIZ } },
+    0
+};
+DatStructVar mhbvars[] = {
+    { AtOff,    "joint",    { .ui = DatJoint } },
+    { AtOff,    "MHQl",     { .ui = DatMapQuinl } }, /* keep this as off instead of list, because it has a special traversal */
+    { AtOff,    "MAl",      { .ui = DatMatAnimAl } },  /* same here */
+    { AtOff,    "MHFl",     { .ui = DatMapHeadFl } },  /* same here */
+    { AtOff,    "MHC",      { .ui = DatMapHeadC } },
+    { AtOff,    "MHH",      { .ui = DatMapHeadH } },
+    { AtOff,    "MPBl",     { .ui = DatMapPlitBl } },
+    { AtOff,    "MHD",      { .ui = DatMapHeadD } },
+    { AtArr,    "Halfl",    { .ui = DatMapHalfA } },
+    { AtWord,   "Halfln",   { .ui = PSIZ } },
+    { AtOff,    "allornot", { .ui = DatMapHeadAoN } },
     { AtWord,   0,          0 },
     { AtWord,   0,          0 },
     0
 };
-DatStructVar mhbvars[] = {
-    { AtOff,    "joint1",   { .ui = DatJoint } },
-    { AtList,   "MHQl",     { .ui = DatMapHeadQnl } },
-    { AtList,   "MAl",      { .ui = DatMatAnimAl } },
-    { AtOff,    "MHHalf",   { .ui = DatMapHeadHalf } },
-    { AtOff,    "MHC",      { .ui = DatMapHeadC } },
-    { AtWord,   0,          0 },
-    { AtList,   "MPBl",     { .ui = DatMapPlitBl } },
-    { AtOff,    "MHD",      { .ui = DatMapHeadD } },
-    { AtWord,   0,          0 },
-    { AtWord,   0,          0 },
-    { AtOff,    "allornot", { .ui = DatMapHeadAoN } },
-    { AtWord,   0,          0 },
-    { AtWord,   0,          0 },
+DatStructVar mdfvars[] = {
+    { AtOff,    "joint",    { .ui = DatJoint } },
+    { AtOff,    "MHQl",     { .ui = DatMapQuinl } },
+    { AtOff,    "MAAl",     { .ui = DatMatAnimAl } },
+    { AtOff,    "MHFl",     { .ui = DatMapHeadFl } },
     0
 };
 DatStructVar mhcvars[] = {
@@ -377,8 +501,6 @@ DatStructVar mhcvars[] = {
     { AtWord,   0,          0 },
     { AtWord,   0,          0 },
     { AtWord,   0,          0 },
-    { AtOff,    "self?",    { .ui = DatMapHeadC } },
-    { AtWord,   0,          0 },
     0
 };
 DatStructVar mhdvars[] = {
@@ -386,19 +508,57 @@ DatStructVar mhdvars[] = {
     { AtWord,   0,          0 },
     { AtHalf,   0,          0 },
     { AtHalf,   0,          0 },
-    { AtWord,   "flags?",   0 },
+    { AtWord,   "flags",    0 }, /* not sure */
     { AtWord,   0,          0 },
-    { AtOff,    "self?",    { .ui = DatMapHeadD } },
+    { AtOff,    "self",     { .ui = DatMapHeadD } }, /* not sure */
     { AtWord,   0,          0 },
     0
 };
 DatStructVar mhevars[] = {
-    { AtOff,    0,          0 },
+    { AtOff,    0,          { .ui = DatMapPlitC } },
+    0
+};
+DatStructVar mhfvars[] = {
+    { AtOff,    "next",     { .ui = DatMapHeadF } },
+    { AtOff,    "child",    { .ui = DatMapHeadF } },
+    { AtOff,    "MHG",      { .ui = DatMapHeadG } },
+    0
+};
+DatStructVar mhflvars[] = {
+    { AtOff,    "MHF",      { .ui = DatMapHeadF } },
+    0
+};
+DatStructVar mhgvars[] = {
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    0
+};
+DatStructVar mhhvars[] = {
+    { AtWord,   0,          0 },
+    { AtOff,    "triple04", { .ui = DatNULL } },
+    { AtOff,    "triple08", { .ui = DatNULL } },
+    { AtOff,    "triple0c", { .ui = DatNULL } },
+    { AtWord,   0,          0 },
+    { AtOff,    "MHC",      { .ui = DatMapHeadC } },
+    { AtOff,    "self",     { .ui = DatMapHeadH } }, /* not sure */
+    0
+};
+DatStructVar mhajdovars[] = {
+    { AtOff,    "jointd",   { .ui = DatJointDataA } },
+    0
+};
+DatStructVar mhampeovars[] = {
+    { AtOff,    "MPE",      { .ui = DatMapPlitE } },
+    { AtWord,   0,          0 },
+    0
+};
+DatStructVar mhamovars[] = {
+    { AtOff,    "material", { .ui = DatMaterial } },
     0
 };
 DatStructVar mhjdvars[] = {
     { AtOff,    "joint",    { .ui = DatJoint } },
-    { AtArr,    "halves",   { .ui = DatMapHeadHalf } },
+    { AtArr,    "halves",   { .ui = DatMapHalf } },
     { AtWord,   "halvesn",  { .ui = PSIZ } },
     0
 };
@@ -411,49 +571,14 @@ DatStructVar mhaonvars[] = {
     { AtWord, "allornot",   0 },
     0
 };
-DatStructVar mhqnlvars[] = {
-    { AtOff,    0,          { .ui = DatMapHeadQuin } },
+DatStructVar mqlvars[] = {
+    { AtOff,    0,          { .ui = DatMapQuin } },
     0
 };
-DatStructVar mhqnvars[] = {
-    { AtOff,    "next",     { .ui = DatMapHeadQuin } },
-    { AtOff,    "child",    { .ui = DatMapHeadQuin } },
-    { AtOff,    "data",     { .ui = DatMapHeadQna } },
-    { AtWord,   0,          0 },
-    { AtWord,   0,          0 },
-    0
-};
-DatStructVar mhqnavars[] = { 
-    { AtWord,   0,          0 },
-    { AtWord,   "flags?",   0 },
-    { AtOff,    "MHQnb",    { .ui = DatMapHeadQnb } },
-    { AtWord,   0,          0 },
-    0
-};
-DatStructVar mhqnbvars[] = {
-    { AtOff,    "next",     { .ui = DatMapHeadQnb } },
-    { AtWord,   "datan",    { .ui = PSIZ } },
-    { AtWord,   "MHQnc",    { .ui = DatMapHeadQnc } },
-    { AtWord,   0,          0 },
-    { AtOff,    "data",     0 },
-    0
-};
-DatStructVar mhqncvars[] = {
-    { AtWord,   0,          0 },
-    { AtWord,   0,          0 },
-    { AtOff,    "MHQnd",    { .ui = DatMapHeadQnd } },
-    { AtWord,   0,          0 },
-    0
-};
-DatStructVar mhqndvars[] = {
-    { AtOff,    "next",     { .ui = DatMapHeadQnd } },
-    { AtWord,   0,          0 },
-    { AtWord,   0,          0 },
-    { AtWord,   0,          0 },
-    { AtOff,    "MHQne",    { .ui = DatMapHeadQne } },
-    0
-};
-DatStructVar mhqnevars[] = {
+DatStructVar mqvars[] = {
+    { AtOff,    "next",     { .ui = DatMapQuin } },
+    { AtOff,    "child",    { .ui = DatMapQuin } },
+    { AtOff,    "MAD",      { .ui = DatMatAnimD } },
     { AtWord,   0,          0 },
     { AtWord,   0,          0 },
     0
@@ -462,7 +587,7 @@ DatStructVar mhqnevars[] = {
 /* -- MapPlit Vars -- */
 DatStructVar mpbvars[] = {
     { AtOff,    0,          { .ui = DatMapPlitC } },
-    { AtOff,    0,          { .ui = DatMapPlitC } },
+    { AtOff,    0,          { .ui = DatMapPlitD } },
     0
 };
 DatStructVar mpblvars[] = {
@@ -474,7 +599,7 @@ DatStructVar mpcvars[] = {
     { AtWord,   0,          0 },
     { AtHalf,   0,          0 },
     { AtHalf,   0,          0 },
-    { AtWord,   "flags?",   0 },
+    { AtWord,   "flags",    0 }, /* not sure */
     { AtOff,    0,          { .ui = DatMapPlitCa } },
     { AtWord,   0,          0 },
     { AtOff,    0,          { .ui = DatMapPlitCb } },
@@ -490,6 +615,18 @@ DatStructVar mpcavars[] = {
 };
 DatStructVar mpcbvars[] = {
     { AtFloat,  0,          0 },
+    0
+};
+DatStructVar mpdvars[] = {
+    { AtOff,    0,          { .ui = DatMapPlitE } },
+    { AtWord,   0,          0 },
+    0
+};
+DatStructVar mpevars[] = {
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
     0
 };
 
@@ -555,13 +692,44 @@ DatStructVar gravars[] = {
     0
 };
 
+/* -- quake_mode_set -- */
+DatStructVar qmsvars[] = {
+    { AtOff,    "QMSA",     { .ui = DatQMSA } },
+    { AtOff,    "QMSl",     { .ui = DatQMSl } },
+    { AtOff,    "QMSB",     { .ui = DatQMSB } },
+    { AtOff,    0,          0 },
+    { AtOff,    "self",     0 }, /* not sure */
+    0
+};
+DatStructVar qmslvars[] = {
+    { AtOff,    "QMS",      { .ui = DatQMS } },
+    0
+};
+DatStructVar qmsbvars[] = {
+    { AtWord,   0,          0 },
+    { AtWord,   "flags",    0 }, /* not sure */
+    { AtOff,    "QMSC",     { .ui = DatQMSC } },
+    { AtWord,   0,          0 },
+    0
+};
+DatStructVar qmscvars[] = {
+    { AtOff,    "next",     { .ui = DatQMSC } },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtWord,   0,          0 },
+    { AtOff,    "data",     { .ui = DatQMSCd } },
+    0
+};
+
 /* -- Type Definition -- */
 DatStruct ddefs[] = {
     [DatNULL] =         { "Unknown",        0, 0,       TDGEN, PDGEN},
     [DatHdr] =          { "Header",         0, hvars,   TDGEN, PDGEN},
     [DatRoot] =         { "Root",           0, rvars,   TDGEN, PDROOT},
-    [DatJoint] =        { "Joint",          0, jvars,   TDGEN, PDGEN},
+    [DatJoint] =        { "Joint",          0, jvars,   TDJOINT, PDGEN},
     [DatJointData] =    { "JointData",      0, jdvars,  TDGEN, PDGEN},
+    [DatJointDataA] =   { "JointDataA",     0, jdavars,  TDGEN, PDGEN},
+    [DatJointDataAd] =  { "JointDataAData", 0, 0,  TDGEN, PDGEN},
     [DatTransform] =    { "Transform",      0, jtvars,  TDGEN, PDGEN},
     [DatMesh] =         { "Mesh",           0, mvars,   TDGEN, PDGEN},
     [DatMaterial] =     { "Material",       0, mtvars,  TDGEN, PDGEN},
@@ -574,47 +742,80 @@ DatStruct ddefs[] = {
     [DatPaletteData] =  { "PaletteData",    0, 0,       TDGEN, PDGEN},
     [DatVertAttr] =     { "VertAttr",       0, vvars,   TDVERTATTR, PDVERTATTR},
     [DatVertData] =     { "VertData",       0, 0,       TDGEN, PDGEN},
+    [DatIndData] =      { "IndData",       0, 0,       TDGEN, PDGEN},
     [DatDisplayArr] =   { "DisplayArr",     0, dvars,   TDGEN, PDGEN},
-    [DatWeightList] =   { "WeightList",     0, wlvars,  TDGEN, PDGEN},
-    [DatWeight] =       { "Weight",         0, wvars,   TDGEN, PDGEN},
+    [DatWeightl] =      { "WeightList",     0, wlvars,  TDLIST, PDGEN},
+    [DatWeight] =       { "Weight",         0, wvars,   TDLIST, PDGEN},
     [DatHitBoxData] =   { "HitBoxData",     0, hbvars,  TDGEN, PDGEN},
     [DatCollision] =    { "Collision",      0, cnvars,  TDGEN, PDGEN},
+    [DatCollData] =     { "CollData",       0, 0,       TDGEN, PDGEN},
 
     [DatMatAnimA] =     { "MatAnimA",       0, maavars, TDGEN, PDGEN},
-    [DatMatAnimAl] =    { "MatAnimAList",   0, malvars, TDGEN, PDGEN},
+    [DatMatAnimAl] =    { "MatAnimAList",   0, malvars, TDPREMDF, PDGEN},
     [DatMatAnimB] =     { "MatAnimB",       0, mabvars, TDGEN, PDGEN},
     [DatMatAnimC] =     { "MatAnimC",       0, macvars, TDMAC, PDGEN},
     [DatMatAnimCi] =    { "MatAnimCi",      0, macivars, TDGEN, PDGEN},
     [DatMatAnimCp] =    { "MatAnimCp",      0, macpvars, TDGEN, PDGEN},
     [DatMatAnimD] =     { "MatAnimD",       0, madvars, TDGEN, PDGEN},
-    [DatMatAnimDd] =    { "MatAnimDd",      0, maddvars, TDGEN, PDGEN},
-    [DatMatAnimDdd] =   { "MatAnimDdd",     0, madddvars, TDGEN, PDGEN},
+    [DatMatAnimE] =     { "MatAnimE",       0, maevars, TDGEN, PDGEN},
+    [DatMatAnimF] =     { "MatAnimF",       0, mafvars, TDGEN, PDGEN},
 
     [DatMapHeadA] =     { "MapHeadA",       0, mhavars, TDGEN, PDGEN},
     [DatMapHeadB] =     { "MapHeadB",       0, mhbvars, TDGEN, PDGEN},
     [DatMapHeadC] =     { "MapHeadC",       0, mhcvars, TDGEN, PDGEN},
     [DatMapHeadD] =     { "MapHeadD",       0, mhdvars, TDGEN, PDGEN},
     [DatMapHeadE] =     { "MapHeadE",       0, mhevars, TDMHE, PDGEN},
+    [DatMapHeadF] =     { "MapHeadF",       0, mhfvars, TDGEN, PDGEN},
+    [DatMapHeadFl] =    { "MapHeadFList",   0, mhflvars, TDPREMDF, PDGEN},
+    [DatMapHeadG] =     { "MapHeadG",       0, mhgvars, TDGEN, PDGEN},
+    [DatMapHeadH] =     { "MapHeadH",       0, mhhvars, TDGEN, PDGEN},
     [DatMapHeadJD] =    { "MapHeadJD",      0, mhjdvars, TDGEN, PDGEN},
-    [DatMapHeadHalf] =  { "MapHeadHalf",    0, mhhalfvars, TDGEN, PDGEN},
     [DatMapHeadAoN] =   { "AllorNot",       0, mhaonvars, TDGEN, PDGEN},
-    [DatMapHeadQnl] =   { "MapHeadQnList",  0, mhqnlvars, TDGEN, PDGEN},
-    [DatMapHeadQuin] =  { "MapHeadQuin",    0, mhqnvars, TDGEN, PDGEN},
-    [DatMapHeadQna] =   { "MapHeadQna",     0, mhqnavars, TDGEN, PDGEN},
-    [DatMapHeadQnb] =   { "MapHeadQnb",     0, mhqnbvars, TDGEN, PDGEN},
-    [DatMapHeadQnc] =   { "MapHeadQnc",     0, mhqncvars, TDGEN, PDGEN},
-    [DatMapHeadQnd] =   { "MapHeadQnd",     0, mhqndvars, TDGEN, PDGEN},
-    [DatMapHeadQne] =   { "MapHeadQne",     0, mhqnevars, TDGEN, PDGEN},
+    [DatMapHalf] =      { "MapHalf",        0, mhhalfvars, TDGEN, PDGEN},
+    [DatMapHalfA] =     { "MapHalfList",    0, 0,       TDGEN, PDGEN},
+
+    [DatMHAJointo] =    { "MHAJointo",      0, mhajdovars, TDGEN, PDGEN},
+    [DatMHAMPEo] =      { "MHAMPEo",        0, mhampeovars, TDGEN, PDGEN},
+    [DatMHAMato] =      { "MHAMato",        0, mhamovars, TDGEN, PDGEN},
+
+    [DatMapQuinl] =     { "MapQuinList",    0, mqlvars, TDPREMDF, PDGEN},
+    [DatMapQuin] =      { "MapQuin",        0, mqvars, TDGEN, PDGEN},
+
+    [DatMapDataFtr] =   { "MapDataFtr",     0, mdfvars, TDMDF, PDGEN},
 
     [DatMapPlitB] =     { "MapPlitB",       0, mpbvars, TDGEN, PDGEN},
-    [DatMapPlitBl] =    { "MapPlitBl",      0, mpblvars, TDGEN, PDGEN},
+    [DatMapPlitBl] =    { "MapPlitBl",      0, mpblvars, TDLIST, PDGEN},
     [DatMapPlitC] =     { "MapPlitC",       0, mpcvars, TDGEN, PDGEN},
     [DatMapPlitCa] =    { "MapPlitCa",      0, mpcavars, TDGEN, PDGEN},
     [DatMapPlitCb] =    { "MapPlitCb",      0, mpcbvars, TDGEN, PDGEN},
+    [DatMapPlitD] =     { "MapPlitD",       0, mpdvars, TDGEN, PDGEN},
+    [DatMapPlitE] =     { "MapPlitE",       0, mpevars, TDGEN, PDGEN},
+
+    [DatMapPtcl] =      { "MapPtcl",        0, 0,       TDGEN, PDGEN},
+    [DatMapTexg] =      { "MapTexg",        0, 0,       TDGEN, PDGEN},
 
     [DatGrP] =          { "GroundParam",    0, grvars,  TDGEN, PDGEN}, 
     [DatGrPA] =         { "GroundParamA",   0, gravars, TDGEN, PDGEN}, 
 
+    [DatQMS] =          { "QuakeMS",        0, qmsvars, TDGEN, PDGEN},
+    [DatQMSl] =         { "QuakeMSList",    0, qmslvars, TDGEN, PDGEN},
+    [DatQMSA] =         { "QuakeMSA",       0, 0,       TDGEN, PDGEN},
+    [DatQMSB] =         { "QuakeMSB",       0, qmsbvars, TDGEN, PDGEN},
+    [DatQMSC] =         { "QuakeMSC",       0, qmscvars, TDGEN, PDGEN},
+    [DatQMSCd] =        { "QuakeMSCd",      0, 0,       TDGEN, PDGEN},
+    
+    [DatItemData] =     { "ItemData",       0, idvars,  TDGEN, PDGEN},
+    [DatItemDatal] =    { "ItemDataList",   0, idlvars, TDLIST, PDGEN},
+    [DatItemDataA] =    { "ItemDataA",      0, idavars, TDGEN, PDGEN},
+    [DatItemDataB] =    { "ItemDataB",      0, 0,       TDGEN, PDGEN},
+    [DatItemDataC] =    { "ItemDataC",      0, idcvars, TDGEN, PDGEN},
+    [DatItemDataD] =    { "ItemDataD",      0, iddvars, TDGEN, PDGEN},
+    [DatItemDataE] =    { "ItemDataE",      0, 0,       TDGEN, PDGEN},
+    [DatItemDataF] =    { "ItemDataF",      0, idfvars, TDGEN, PDGEN},
+    [DatItemDataG] =    { "ItemDataG",      0, idgvars, TDGEN, PDGEN},
+    [DatItemDataH] =    { "ItemDataH",      0, idhvars, TDGEN, PDGEN},
+    [DatYakumono] =     { "Yakumono",       0, 0,       TDGEN, PDGEN},
+    [DatYakuAll] =      { "ALDYakuAll",     0, 0,       TDGEN, PDGEN},
     [DatLast] = { 0 },
 };
 
@@ -627,33 +828,52 @@ DatRootFmt dnametype[] = {
     { "ftData", 0, 0 },
     { 0, "_tlut_desc", DatPalette },
     { 0, "_tlut", DatPaletteData },
+    { 0, "_image", DatImageData },
     { "coll_data", 0, DatCollision },
     { "grGroundParam", 0, DatGrP },
     { "map_head", 0, DatMapHeadA },
     { "map_plit", 0, DatMapPlitBl },
+    { "map_ptcl", 0, DatMapPtcl },
+    { "map_texg", 0, DatMapTexg },
+    { "itemdata", 0, DatItemDatal },
+    { "quake_model_set", 0, DatQMS },
+    { "ALDYakuAll", 0,      DatYakuAll },
+    { "yakumono_param", 0,  DatYakumono },
     { 0, 0, 0 },
 };
 
 /* -- Function Definitions -- */
+void
+_PDFLAG(uint32_t flag) {
+    int i;
+    for(i=0; flag; (flag >>= 1), ++i) {
+        if(flag & 1) printf(" f_%02d", i);
+    }
+}
+
 void 
 _PDATM(DatStructVar* dvp, uint8_t* ptr) {
-    char format[] = "%10d";
+    char format[] = "%10x";
     uint32_t temp;
-    if(dvp->extra.ui==PHEX) format[3]='x';
+    if(dvp->extra.ui==PDEC) format[3]='d';
     switch(dvp->type) {
         case AtWord:  printf(format, be32toh(*(uint32_t*)ptr)); break;
         case AtHalf:  printf(format, be16toh(*(uint16_t*)ptr)); break;
         case AtByte:  printf(format, *(uint8_t*)ptr); break;
         case AtFloat: printf("%10f", *(float*)(temp=be32toh(*(uint32_t*)ptr), &temp)); break;
-        case AtList:
         case AtArr:
-        case AtOff:   printf(":%08x:", be32toh(*(uint32_t*)ptr)); break;
+        case AtOff:   printf("*%08x", be32toh(*(uint32_t*)ptr)); break;
         case AtSub:   if(dvp->extra.sv->extra.ui>1) printf("[%d]", dvp->extra.sv->extra.ui); break;
     }
 }
 
 void
-PDGEN(DatStructVar* dvp, uint8_t* ptr, DatStructVar ctx) {
+_indent(int n) {
+    while(n--) { printf("    "); }
+}
+
+void
+PDGEN(int pre, DatStructVar* dvp, uint8_t* ptr, DatStructVar ctx) {
     char atnames[AtLast] = {
         [AtWord] =  'w',
         [AtHalf] =  'h',
@@ -662,25 +882,25 @@ PDGEN(DatStructVar* dvp, uint8_t* ptr, DatStructVar ctx) {
         [AtOff] =   'o',
         [AtSub] =   's',
         [AtArr] =   'a',
-        [AtList] =  'l',
     };
     int i;
     if(!dvp) return;
     while(dvp->type) {
-        printf("%c %8s ", atnames[dvp->type], dvp->name);
+        _indent(pre);
+        printf("%c %s: ", atnames[dvp->type], dvp->name);
         _PDATM(dvp, ptr);
         switch(dvp->type) {
         case AtSub:
             for(i=0; i<dvp->extra.sv->extra.ui; ++i) {
                 printf("{\n");
-                PDGEN(dvp->extra.sv+1, ptr, (DatStructVar){ 0 });
+                PDGEN(pre+1, dvp->extra.sv+1, ptr, (DatStructVar){ 0 });
                 ptr+=dvp->extra.sv->type;
                 printf("}, ");
             }
             break;
         case AtHalf: ptr+=2; break;
         case AtByte: ptr+=1; break;
-        case AtList:
+        case AtWord: if(dvp->extra.ui == PFLG) _PDFLAG(be32toh(*(uint32_t*)ptr)); ptr+=4; break;
         case AtArr:
         case AtOff: if(dvp->extra.ui) printf(" %s", ddefs[dvp->extra.ui].name);
         default: ptr+=4; break;
@@ -691,14 +911,15 @@ PDGEN(DatStructVar* dvp, uint8_t* ptr, DatStructVar ctx) {
 }
 
 void
-PDROOT(DatStructVar* dvp, uint8_t* ptr, DatStructVar ctx) {
+PDROOT(int pre, DatStructVar* dvp, uint8_t* ptr, DatStructVar ctx) {
     char* strt;
     if(!dvp) return;
-    if(ctx.type != DatHdr) return PDGEN(dvp, ptr, ctx);
+    if(ctx.type != DatHdr) return PDGEN(pre, dvp, ptr, ctx);
     strt = ctx.name;
     if(ctx.extra.ui==0) ctx.extra.ui=1;
 
     while(ctx.extra.ui--) {
+        _indent(pre);
         _PDATM(dvp, ptr);
         printf(" %11s ", ddefs[ROOTTYPE((uint32_t*)ptr, strt).type].name);
         ptr+=4;
@@ -708,11 +929,17 @@ PDROOT(DatStructVar* dvp, uint8_t* ptr, DatStructVar ctx) {
 }
 
 void
-PDLIST(DatStructVar* dvp, uint8_t* ptr, DatStructVar ctx) {
+PDVERTATTR(int pre, DatStructVar* dvp, uint8_t* ptr, DatStructVar ctx) {
+    if(!dvp) return;
+    while(be32toh(*(uint32_t*)ptr)!=0xff) {
+        PDGEN(pre, dvp, ptr, ctx);
+        ptr+=ddefs[DatVertAttr].size;
+    }
+    PDGEN(pre, dvp, ptr, ctx);
 }
 
 int
-TDGEN(DatStructVar* dvp, uint8_t* buf, offtype* ots) {
+TDGEN(DatStructVar* dvp, uint8_t* buf, offtype* ots, offtype *self) {
     int i, j, asize;
     char* asize_s;
     if(!dvp) return 0;
@@ -734,9 +961,9 @@ TDGEN(DatStructVar* dvp, uint8_t* buf, offtype* ots) {
                 buf+=2; break;
             case AtOff:  
                 if(*(uint32_t*)buf) {
+                    ots[i] = INITIALIZE_OFFTYPE;
                     ots[i].o = be32toh(*(uint32_t*)buf);
                     ots[i].t = dvp->extra.ui;
-                    ots[i].v = 0;
 #ifdef DEBUG
                     printf("\n-- o %11s %8x", ddefs[ots[i].t].name, ots[i].o);
 #endif
@@ -756,26 +983,17 @@ TDGEN(DatStructVar* dvp, uint8_t* buf, offtype* ots) {
                         }
                     }
                     if(asize) {
+                        ots[i] = INITIALIZE_OFFTYPE;
                         ots[i].o = be32toh(*(uint32_t*)buf);
                         ots[i].t = dvp->extra.ui;
-                        ots[i].v = -(asize-1);
+                        ots[i].v = -(asize)+1;
+                        ots[i].z = asize;
 #ifdef DEBUG
-                        printf("\n-- a %11s %8x %8x", ddefs[ots[i].t].name, ots[i].o, -ots[i].v);
+                        printf("\n-- a %11s %8x %8x", ddefs[ots[i].t].name, ots[i].o, ots[i].z);
 #endif
                         ++i;
                     }
                     asize = 1;
-                }
-                buf+=4; break;
-            case AtList: 
-                if(*(uint32_t*)buf) {
-                    ots[i].o = be32toh(*(uint32_t*)buf);
-                    ots[i].t = dvp->extra.ui;
-                    ots[i].v = 2;
-#ifdef DEBUG
-                    printf("\n-- l %11s %8x", ddefs[ots[i].t].name, ots[i].o);
-#endif
-                    ++i;
                 }
                 buf+=4; break;
             case AtFloat:buf+=4; break;
@@ -787,7 +1005,7 @@ TDGEN(DatStructVar* dvp, uint8_t* buf, offtype* ots) {
                 buf+=4; break;
             case AtSub:
                 for(j=0; j<dvp->extra.sv->extra.ui; ++j) {
-                    i += TDGEN(dvp->extra.sv+1, buf, ots+i);
+                    i += TDGEN(dvp->extra.sv+1, buf, ots+i, self);
                     buf += dvp->extra.sv->type;
                 }
                 break;
@@ -797,57 +1015,81 @@ TDGEN(DatStructVar* dvp, uint8_t* buf, offtype* ots) {
 }
 
 int
-TDMHE(DatStructVar* dvp, uint8_t* buf, offtype* ots) {
-    if(!dvp) return 0;
-    ots->t=DatNULL;
-    ots->o=be32toh(*(uint32_t*)buf);
-    ots->v=0;
-    return (ots->o && ots->o != 0xc0000000);
-}
-
-void
-PDVERTATTR(DatStructVar* dvp, uint8_t* ptr, DatStructVar ctx) {
-    if(!dvp) return;
-    while(be32toh(*(uint32_t*)ptr)!=0xff) {
-        PDGEN(dvp, ptr, ctx);
-        ptr+=ddefs[DatVertAttr].size;
+TDLIST(DatStructVar *dvp, uint8_t *buf, offtype *ots, offtype *self) {
+    int t,s;
+    for(t=0, s=0; dvp[t].type; ++t) {
+        switch(dvp[t].type) {
+        case AtByte: s+=1; break;
+        case AtHalf: s+=2; break;
+        case AtSub:  s+=dvp[t].extra.sv->extra.ui; break;
+        default:     s+=4; break;
+        }
     }
-    PDGEN(dvp, ptr, ctx);
+
+    for(t=0;*(uint32_t*)buf;  buf+=s)
+        t+=TDGEN(dvp, buf, ots+t, self);
+
+    return t;
 }
 
 int
-TDVERTATTR(DatStructVar* dvp, uint8_t* buf, offtype* ots) {
+TDMHE(DatStructVar* dvp, uint8_t* buf, offtype* ots, offtype *self) {
+    if(!dvp) return 0;
+    *ots = INITIALIZE_OFFTYPE;
+    ots->t=dvp->extra.ui;
+    ots->o=be32toh(*(uint32_t*)buf);
+    ots->v=0;
+#ifdef DEBUG
+    if(ots->o && ots->o !=0xc0000000)
+        printf("\n-- o %11s %8x", ddefs[ots->t].name, ots->o);
+#endif
+    return (ots->o && ots->o != 0xc0000000);
+}
+
+int
+TDVERTATTR(DatStructVar* dvp, uint8_t* buf, offtype* ots, offtype *self) {
     int t=0;
     int i=0;
     if(!dvp) return 0;
     while(be32toh(*(uint32_t*)buf)!=0xff && (i++) < 4) {
-        t += TDGEN(dvp, buf, ots+t);
+        t += TDGEN(dvp, buf, ots+t, self);
         buf += ddefs[DatVertAttr].size;
     }
     return t;
 }
 
 int
-TDMAC(DatStructVar* dvp, uint8_t* buf, offtype* ots) {
+TDMAC(DatStructVar* dvp, uint8_t* buf, offtype* ots, offtype *self) {
     int t,i;
     uint32_t img;
     uint32_t pal;
     if(!dvp) return 0;
-    if(dvp != macvars) printf("What is happening?\n");
+    if(dvp != macvars) printf("TDMAC called on wrong type\n");
     t=i=0;
     img=pal=0;
     for(i=0; dvp[i].type; ++i) {
         switch(i) {
-        case 2:
-            ots->o=be32toh(*(uint32_t*)buf);
-            if(ots->o) {
-                ots->t = dvp[i].extra.ui;
-                ots->v = 0;
+            case 0:
+                ots->o=be32toh(*(uint32_t*)buf);
+                if(ots->o) {
+                    ots->t = dvp[i].extra.ui;
+                    ots->v = 0;
+                    ++t;
+                    ++ots;
+                    *ots=INITIALIZE_OFFTYPE;
+                }
+                break;
+            case 2:
+                ots->o=be32toh(*(uint32_t*)buf);
+                if(ots->o) {
+                    ots->t = dvp[i].extra.ui;
+                    ots->v = 0;
 #ifdef DEBUG
                 printf("\n-- o %11s %8x", ddefs[ots->t].name, ots->o);
 #endif
                 ++t;
                 ++ots;
+                *ots=INITIALIZE_OFFTYPE;
             }
             break;
         case 3: img=be32toh(*(uint32_t*)buf); break;
@@ -861,6 +1103,7 @@ TDMAC(DatStructVar* dvp, uint8_t* buf, offtype* ots) {
 #endif
                 ++t;
                 ++ots;
+                *ots=INITIALIZE_OFFTYPE;
             } break;
         case 6: if(pal) {
                 ots->o=pal;
@@ -871,6 +1114,7 @@ TDMAC(DatStructVar* dvp, uint8_t* buf, offtype* ots) {
 #endif
                 ++t;
                 ++ots;
+                *ots=INITIALIZE_OFFTYPE;
             } break;
         default: break;
         }
@@ -881,6 +1125,92 @@ TDMAC(DatStructVar* dvp, uint8_t* buf, offtype* ots) {
         default: buf+=4; break;
         }
     }
+    return t;
+}
+
+static int 
+TDPREMDF(DatStructVar *dvp, uint8_t *buf, offtype *ots, offtype *self) {
+    int y,t,i,j;
+    uint32_t *b = (uint32_t*)buf;
+    if(!dvp) return 0;
+    /* null value indicates either null list (in which case we return 0) or null Joint point (in which case we return 0) */
+    if(!be32toh(*(uint32_t*)buf)) return 0; 
+    
+    /* MapDataFtr structs exist in the file without any other parent structs pointing to them
+     * the only offsets to MapDataFtr's is in the list at the end, where they often include their own offsets
+     * However, it seems as if they follow this general order
+     * 1    MapQuinList
+     * 2    MatAnimAList (optional)
+     * 3    MapHeadFList (optional)
+     * 4    MapDataFtr
+     *          Joint
+     *          MapQuinList   :1:
+     *          MatAnimAList  :2: or 0
+     *          MapHeadFLIst  :3: or 0
+     * 5    MapDataFtrList (optional, often includes :4:)
+     */
+    for(t=0, i=0; (ots[t].o = be32toh(b[i])); ++i) {
+        ots[t++].t = dvp->extra.ui;
+#ifdef DEBUG
+        printf("\n-- o %11s %8x", ddefs[ots[t].t].name, ots[t].o);
+#endif
+    }
+        
+    switch(dvp->extra.ui) {
+    case DatMapQuin: y=2; break;
+    case DatMatAnimA:    y=3; break;
+    case DatMapHeadF:    y=4; break;
+    default: 
+        printf("TDPREMDF called on non PREMDF struct %d /c { %d %d %d }\n", dvp->type, DatMapQuin, DatMatAnimA, DatMapHeadF);
+        return 0;
+    }
+
+    for(i=0, j=y; j<5; ++j) {
+        if(be32toh(b[i+y]) == self->o)
+            break;
+        for(; be32toh(b[i]); ++i);
+    }
+
+    if(j>=5) {
+#ifdef DEBUG
+        printf("%d couldn't find MapDataFtr\n", self->o);
+#endif
+        return t;
+    }
+    ots[t].t = DatMapDataFtr;
+    ots[t].o = self->o+(i+1)*4;
+#ifdef DEBUG
+    printf("\n-- o %11s %8x", ddefs[ots[t].t].name, ots[t].o);
+#endif
+    ++t;
+    return t;
+}
+
+static int 
+TDMDF(DatStructVar *dvp, uint8_t *buf, offtype *ots, offtype *self) {
+    int t,i;
+    /* read normal struct */
+    t=TDGEN(dvp,buf,ots,self);
+    
+    /* read the list at the end */
+    for(i=4; (ots[t].o = be32toh(*(((uint32_t*)buf)+i))); ++i)
+        ots[t++].t = DatMapDataFtr;
+
+    return t;
+}
+
+static int
+TDJOINT(DatStructVar *dvp, uint8_t *buf, offtype *ots, offtype *self) {
+    int i, t, d, f;
+    t=TDGEN(dvp,buf,ots,self);
+    if(!(d=be32toh(((uint32_t*)buf)[4]))) return t;
+    f=be32toh(*(uint32_t*)(buf+4));
+    if(!(f & 1<<14)) return t;
+
+    for(i=0; i<t && ots[i].o != d; ++i);
+    if(i==t) return t;
+    
+    ots[i].t = DatJointDataA;
     return t;
 }
 
