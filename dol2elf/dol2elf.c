@@ -431,16 +431,20 @@ print_dol_hdr(const char* dol_file) {
     int i;
     DOL_hdr hdr;
     FILE *fp;
+    char *tnames[7] = {".init", ".text", "_text2", "_text3", "_text4", "_text5", "_text6"};
+    char *dnames[11] = {"extab", "extabindex", ".ctors", ".dtors", ".rodata", ".data", ".sdata", ".sdata2", "_data8", "_data9", "_data10"};
 
     if(!(fp=fopen(dol_file, "r"))) perrordie("Couldn't open DOL file for reading\n");
     if(fread(&hdr, sizeof(DOL_hdr), 1, fp) != 1) perrordie("Couldn't read header from DOL file");
     fclose(fp);
 
-    printf("name  | %8s %8s %8s\n", "off", "addr", "size");
-    for(i=0; i<7; ++i) if(hdr.text_off[i]) printf("text%x | %8x %8x %8x\n", i, swap32(hdr.text_off[i]), swap32(hdr.text_addr[i]), swap32(hdr.text_size[i]));
-    for(i=0; i<11; ++i) if(hdr.data_off[i]) printf("data%x | %8x %8x %8x\n", i, swap32(hdr.data_off[i]), swap32(hdr.data_addr[i]), swap32(hdr.data_size[i]));
-    printf("bss   |          %8x %8x\n", swap32(hdr.bss_addr), swap32(hdr.bss_size));
-    printf("entry |          %8x\n", swap32(hdr.entry));
+    printf("name       | %8s %8s %8s\n", "off", "addr", "size");
+    for(i=0; i<7; ++i) if(hdr.text_off[i]) printf("%10s | %8x %8x %8x\n", tnames[i], swap32(hdr.text_off[i]), swap32(hdr.text_addr[i]), swap32(hdr.text_size[i]));
+    printf("-----------|\n");
+    for(i=0; i<11; ++i) if(hdr.data_off[i]) printf("%10s | %8x %8x %8x\n", dnames[i], swap32(hdr.data_off[i]), swap32(hdr.data_addr[i]), swap32(hdr.data_size[i]));
+    printf("-----------|\n");
+    printf("      .bss |          %8x %8x\n", swap32(hdr.bss_addr), swap32(hdr.bss_size));
+    printf("     entry |          %8x\n", swap32(hdr.entry));
 }
 
 void 
@@ -448,11 +452,12 @@ usage(const char *p) {
     int i=strlen(p);
     while(i!=0 && p[i-1] != '/') { i--; }
     const char* name = p+i;
-    fprintf(stderr, "Usage: %s [-h] [-v] [--] dol-file elf-file\n", name);
-    fprintf(stderr, " Convert a DOL file to an ELF file (by segments)\n");
-    fprintf(stderr, " Options:\n");
-    fprintf(stderr, "  -h    Show this help\n");
-    fprintf(stderr, "  -v    Be more verbose (twice for even more)\n");
+    printf("Usage: %s [-h] [-v] [-i] [--] dol-file elf-file\n", name);
+    printf(" Convert a DOL file to an ELF file (by segments)\n");
+    printf(" Options:\n");
+    printf("  -h    Show this help\n");
+    printf("  -i    Print dol section information\n"); 
+    printf("  -v    Be more verbose (twice for even more)\n");
 }
 
 int 
