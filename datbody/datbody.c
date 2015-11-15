@@ -1,614 +1,1169 @@
-#include<endian.h>
-#include<stdint.h>
-#include<stdio.h>
-#include<stdlib.h>
-#include<string.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
 
-#include "gxenums.h"
+#include "arg.h"
 
-#define LEN(a) (sizeof(a) / sizeof(a[0]))
+#define LEN(x) (sizeof(x) / sizeof(*(x)))
 
 enum {
- AtWord = 1,
- AtHalf,
- AtByte,
- AtFloat,
- AtOff,
- AtSub,
- AtArr,
- AtLast
+	FARR = 1,
+	VARR = 2,
+	NARR = 3,
+	ARRM = (1 << 2) - 1,
+	RSVT = 1 << 2,
+	RSVA = 1 << 3,
+	MAXOFF = 0xffffffff,
 };
-enum { PHEX, PDEC, PBIT, PSIZ, PSGN, PFLG };
-enum { SFixed, SList, SCust };
+
+typedef struct Defo_t Defo;
 
 typedef struct {
-    uint32_t o;
-    int      t;
-    int      v;
-    int      z;
-    uint32_t p;
-    int      pt;
-} offtype;
-const offtype INITIALIZE_OFFTYPE = { 0, 0, 0, 1, 0, 0 };
+	unsigned int flags;
+	union {
+		char *type;
+		struct Def_t *def;
+	};
+	union {
+		unsigned int ui;
+		char *s;
+	};
+} Defx;
 
-typedef  union {
-        struct {
-        uint32_t filesz;
-        uint32_t datasz; 
-        uint32_t reltnum;
-        uint32_t rootnum;
-        uint32_t srootnum;
-        uint32_t _p[3];
-        };
-        uint32_t m[8];
-} DHdr;
-    
-typedef struct {
-    uint8_t* data;
-    offtype* offtypes;
-    int dz;
-    int otz;
-    int otm;
-} DData;
+typedef struct Def_t {
+	char *type;
+	char *format;
+	char **mems;
+	Defx *extra;
+	int  *off;
+	void (*print)(Defo*,void*);
+	int  (*null)(Defo*,void*);
+	Defo *(*gen)(Defo*,void*,void*);
+	unsigned int size;
+	unsigned int meml;
+} Def;
 
-struct DatStructVar_t;
-typedef union {
-    int i;
-    unsigned int ui;
-    float f;
-    void* v;
-    struct DatStructVar_t* sv;
-} DatExtra;
+typedef struct DefL_t {
+	struct DefL_t *next;
+	Def def;
+} DefL;
 
-typedef struct DatStructVar_t {
-    unsigned int type;
-    char*        name;
-    DatExtra     extra;
-} DatStructVar;
-typedef void (*DatPrintFun)(int, DatStructVar*, uint8_t*, DatStructVar);
-typedef int (*DatTravFun)(DatStructVar*, uint8_t*, offtype*, offtype*);
-typedef struct {
-    char* name;
-    unsigned int size;
-    DatStructVar* vars;
-    DatTravFun trav;
-    DatPrintFun print;
-} DatStruct;
+struct Defo_t {
+	unsigned int off;
+	Def*         def;
+};
 
-typedef struct {
-    char* pre;
-    char* suf;
-    int type;
-} DatRootFmt;
+typedef struct genHdrInfo_t {
+	Def *defs;
+	DefL *defx;
+	char *strs;
+} genHdrInfo;
 
-#include "structs.h"
+static int   defoappend(Defo **arrp, size_t arrn, Defo *app, size_t appn);
+static Def  *genrootgetdef(Def *defs, char *name);
+static Defo *g_hdr(Defo *defo, void *data, void *infop);
+static Defo *g_generic(Defo *defo, void *data, void *info);
+static void  gentree(Defo **defop, genHdrInfo *ghi, void *data);
 
-int  cmpot(const void*, const void*);
-void definit();
-int  datreadot(DData*, char*);
-int  datreadbuf(uint8_t**, char*);
-void documentation();
-void documentrec(DatStructVar*, int);
-int  insot(offtype*, size_t, offtype);
+static int   axtoi(const char *str);
+static void  cleanupdefs(Def **defp, DefL *lst);
+static void  cmdloop(Defo *defos, genHdrInfo *ghi, void *data);
+static int   defcmp(const void *a, const void *b);
+static void  destroydef(Def *def);
+static void  destroydefs(Def *defs);
+static void  eprintf(const char *, ...);
+static void  flattendefL(Def *defs, DefL *lst);
+static int   getarr(char *str);
+static Def  *getdef(Def *defs, char *type);
+static void  initdef(Def *def, char *str);
+static int   maxtypelen(Def *defs);
+static int   n_generic(Defo *defo, void *data);
+static DefL *newdefL(DefL *next, char *line);
+static void  p_generic(Defo *defo, void *data);
+static void  p_hdr(Defo *defo, void *data);
+static void  p_char(Defo *defo, void *data);
+static void  parsemems(Def *def, char *str);
+static void  printdef(Def *def);
+static void  printdefs(Def *defs);
+static void  protos2lst(DefL **lstp);
+static void  readdat(void **dst, char *file);
+static void  readdefs(Def **defps);
+static void  resolvdefs(Def *def);
+static void  resolvmem(Def *def, void *mem);
+static void  resolvnullnames(Def *def);
+static int   resolvsize(Def *defs, Def *def);
+static void  resolvtype(Def *defs, char **type);
+static void  unpack(Def *def, void *src, void *dst, int mem);
+static void  usage();
+static int   scanarr(unsigned int *arrp, char *line);
+static int   scanoff(unsigned int *offp, char *line);
+static int   scantype(Def *defs, Def **defp, int max, char *line);
 
-int  pfbody(char*, char*, char*);
-int  pfonly(char*, char*);
-int  pfoffs(char*);
-int  pfroot(char*);
-int  pfstruct(char*, uint32_t, uint32_t);
-int  sortuot(offtype*, size_t);
-void usage();
+static int debug = 0;
 
-char* exename;
+#include "datbody.conf.h"
 
-void 
-definit() {
-    for(DatStruct* dp = ddefs; dp < ddefs + LEN(ddefs); ++dp) {
-        if(!dp->vars) continue;
-        DatStructVar* dvp = dp->vars;
-        while(dvp->type) {
-            switch (dvp->type) {
-            case AtByte: dp->size += 1; break;
-            case AtHalf: dp->size += 2; break;
-            case AtSub:  dp->size += (dvp->extra.sv->type*dvp->extra.sv->extra.ui); break;
-            default: dp->size += 4; break;
-            }
-            ++dvp;
-        }
-    }
+char *argv0;
+
+void
+gentree(Defo **defop, genHdrInfo *ghi, void *data) {
+	Defo *defo = *defop;
+	Def *hdrdef;
+
+	printf("gentree %s\n", ghi->defs[0].type);
+	hdrdef = getdef(ghi->defs, "hdr");
+	defo = calloc(1, sizeof(Defo));
+	defo[0].off = 0;
+	defo[0].def = hdrdef;
+	printf("  hdrdef->type %s\n", hdrdef->type);
+	defoappend(&defo, 1, hdrdef->gen(defo, data, ghi), 0);
 }
 
 int
-pfbody(char* file_s, char* type_s, char* off_s) {
-    uint32_t i, type = 0, off;
-    if(!type_s) {
-        fprintf(stderr, "Missing: TYPE\n");
-        usage();
-    }
-    if(!off_s) {
-        fprintf(stderr, "Missing: OFF\n");
-        usage();
-    }
+defoappend(Defo **arrp, size_t arrn, Defo *app, size_t appn) {
+	Defo *arr = *arrp;
 
-    if(sscanf(off_s, ":%8x:", &off) != 1 && sscanf(off_s, "%x", &off) != 1) return 3;
-    for(i=1; i < DatLast; i++) {
-        if(!ddefs[i].name) continue;
-        if(!strcmp(type_s, ddefs[i].name)) {
-            type = i;
-            break;
-        }
-    }
-    return pfstruct(file_s, type, off+0x20);
+	if(!app) return arrn;
+	if(arrn == 0 && arr)
+		while(arr[arrn].def) ++arrn;
+	if(appn == 0 && app)
+		while(app[appn].def) ++appn;
+
+	++appn; // array of 3 will be 3 data plus 1 null terminator
+
+	if(!(arr = realloc(arr, (arrn + appn) * sizeof(Defo)))) {
+		eprintf("realloc Defo array");
+		return 0;
+	}
+
+	memcpy(&arr[arrn-1], app, appn * sizeof(Defo));
+	*arrp = arr;
+	return arrn + appn;
 }
 
-offtype* 
-lfind(offtype* key, offtype* base, size_t _s, size_t size, int(*compar)(const void*, const void*)) {
-    int i;
-    for(i=0; i<size; ++i) {
-        if(!compar(key, base+i)) return base+i;
-    }
-    return 0;
+Defo *
+g_root(Defo *defo, void *data, void *info) {
+	Def *def = defo->def, *childdef;
+	Defo *ret;
+	unsigned char *buf = data;
+	int i, reti=0;
+	unsigned int offbuf, namebuf;
+	genHdrInfo *ghi = info;
+
+	unpack(defo->def, &buf[defo->off], &offbuf, 0);
+	unpack(defo->def, &buf[defo->off], &namebuf, 1);
+
+	ret = calloc(1, sizeof(Defo));
+	ret->def = genrootgetdef(ghi->defs, &ghi->strs[namebuf]);
+	if(!ret->def) ret->def = getdef(ghi->defs, "x");
+
+	ret->off = offbuf;
+	return ret;
 }
 
-offtype* 
-otbsearch(offtype* key, offtype* base, size_t _s, size_t size, int(*compar)(const void*, const void*)) {
-    int i;
-    while(size) {
-        i=(size/2);
-        switch(compar(key, base+i)) {
-        case -1: size=i; break;
-        case  0: return base+i;
-        case  1: base+=(i+1);size-=(i+1); break;
-        }
-    }
-    return 0;
+Defo *
+g_generic(Defo *defo, void *data, void *info) {
+	Def *def = defo->def;
+	Defo *ret, *tmp, tmp2;
+	unsigned char *buf = data;
+	int i, reti=0;
+	unsigned int ibuf;
+
+	printf("g_generic %s %s %x\n", def->type, def->format, defo->off);
+	for(i=0; def->format[i]; ++i) {
+		switch(def->format[i]) {
+		case 'p':
+			unpack(def, &buf[defo->off], &ibuf, i);
+			tmp2.def = def->extra[i].def;
+			tmp2.off = ibuf;
+			tmp = tmp2.def->gen(&tmp2, &buf[defo->off], info);
+			break;
+		case '?':
+			tmp2.def = def->extra[i].def;
+			tmp2.off = def->off[i] + defo->off;
+			tmp = tmp2.def->gen(&tmp2, &buf[defo->off], info);
+			break;
+		default:
+			tmp = NULL;
+			break;
+		}
+		if(!tmp) continue;
+
+		if((reti = defoappend(&ret, reti, tmp, 0)) == 0) {
+			eprintf("append Defo array");
+			free(tmp);
+			free(ret);
+			return NULL;
+		}
+	}
+
+	return ret;
 }
 
-int
-datreadbuf(uint8_t **dst, char* file_s) {
-    uint32_t i, *hdr;
-    uint8_t *buf;
-    FILE *file;
+DefL *
+genroot(DefL *defx, Def *defs, char *strs, void *data, unsigned int off) {
+	unsigned int ibuf;
+	Def *rootdef, *childdef, *tmpdef;
+	DefL *ret;
+	unsigned char *buf = data;
 
-    file = fopen(file_s, "r");
-    if(!file) return 2;
+	rootdef = getdef(defs, "root");
+	if(!rootdef) {
+		eprintf("root type not defined");
+	}
 
-    hdr = calloc(sizeof(uint32_t), 8);
-    fread(hdr, sizeof(uint32_t), 8, file);
-    for(i=0; i<5; ++i) hdr[i] = be32toh(hdr[i]);
-    hdr = realloc(hdr, hdr[0]+1);
-    buf = (uint8_t*)hdr;
-    fread(buf+0x20, hdr[0]-0x20, 1, file);
-    fclose(file);
+	printf("genroot\n");
+	unpack(rootdef, buf + off, &ibuf, 1);
+	printf("  strs[%d]\n", ibuf);
+	childdef = genrootgetdef(defs, &strs[ibuf]);
+	if(!childdef) return NULL;
 
-    *dst = buf;
-    return 0;
+	ret = calloc(1, sizeof(DefL));
+	ret->next = defx;
+	
+	tmpdef = &ret->def;
+	tmpdef->type = calloc(1, strlen(rootdef->type)+1);
+	tmpdef->format = calloc(1, strlen(rootdef->format)+1);
+	tmpdef->mems = calloc(2, sizeof(char*));
+	tmpdef->extra = calloc(2, sizeof(Defx));
+	tmpdef->off = calloc(2, sizeof(int));
+	
+	strcpy(tmpdef->type, rootdef->type);
+	strcpy(tmpdef->format, "px");
+	tmpdef->mems[0] = calloc(1, strlen(rootdef->mems[0]) + 1);
+	tmpdef->mems[1] = calloc(1, strlen(rootdef->mems[1]) + 1);
+	strcpy(tmpdef->mems[0], rootdef->mems[0]);
+	strcpy(tmpdef->mems[1], rootdef->mems[1]);
+	tmpdef->extra[0].def = childdef;
+	tmpdef->off[0] = rootdef->off[0];
+	tmpdef->off[1] = rootdef->off[1];
+	tmpdef->print = rootdef->print;
+	tmpdef->null = rootdef->null;
+	tmpdef->gen = rootdef->gen;
+	tmpdef->size = rootdef->size;
+	tmpdef->meml = rootdef->meml;
+
+
+	return ret;
 }
 
-int 
-datreadot(DData *ddata, char* file_s) {
-    uint32_t i, j, z, u, t;
-    uint32_t *relt, *root, *strt;
-    uint8_t *buf, *body;
-    offtype *ots, *match;
-    DHdr *hdr;
+Def *
+genrootgetdef(Def *defs, char *name) {
+	int i;
+	int namen;
+	int checkn;
+	
+	namen = strlen(name);
+	for(i=0; i<LEN(rootnames); ++i) {
+		if(!rootnames[i].name) continue;
 
-    if(ddata->dz==0 && datreadbuf(&(ddata->data), file_s)) return 1;
-    hdr = (DHdr*)(buf = ddata->data);
-    z = 2*hdr->reltnum;
-    ots = calloc(z, sizeof(offtype));
-    body = buf+0x20;
+		if(rootnames[i].pre) {
+			checkn = strlen(rootnames[i].pre);
+			if(strncmp(rootnames[i].pre, name, checkn) != 0)
+				continue;
+		}
 
-    /* construct base array from reloc table */
-    relt = (uint32_t*)(body+hdr->datasz);
-    for(i=0; i<hdr->reltnum; ++i) {
-        ots[i] = INITIALIZE_OFFTYPE;
-        j = *(uint32_t*)(body+be32toh(relt[i]));
-        /* reposition all offsets to offset+0x20, so it can be accessed with buf+offset, 
-         * and checking offset==0 will return false for real offsets 
-         * (including those pointing to the position 0x00000000) */
-        /* it's a workaround for all offsets pointing to whatever data struct 
-         * starts the file (at body[0]). */
-        ots[i].o = be32toh(j)+0x20;
-        *(uint32_t*)(body+be32toh(relt[i])) = be32toh(ots[i].o);
-        ots[i].t = DatNULL;
-    }
+		if(rootnames[i].suf) {
+			checkn = strlen(rootnames[i].suf);
+			if(strncmp(rootnames[i].suf, name + (namen - checkn), checkn) != 0)
+				continue;
+		}
 
-    root = (uint32_t*)(body+hdr->datasz+(hdr->reltnum*sizeof(uint32_t)));
-    strt = (uint32_t*)(body+hdr->datasz+(hdr->reltnum*sizeof(uint32_t))+((hdr->rootnum+hdr->srootnum)*ddefs[DatRoot].size));
-    for(j=i+hdr->rootnum+hdr->srootnum; root!=strt; root+=2) {
-        if(!root[0]) continue;
-        ots[i] = INITIALIZE_OFFTYPE;
-        ots[i].o = be32toh(*root)+0x20;
-        ots[i].t = ROOTTYPE(root, (char*)strt).type;
-        ots[i].v = 0;
-        /* we have to add the root offsets twice, because the structs they point to 
-         * might not be pointed to by anything else in the body, and thus wouldn't 
-         * show up in the relocation table scan */
-        /* this way, after the list is sorted and duplicates removed, the second list 
-         * of roots can be copied to the end, and we can start the main loop there */
-        ots[j++] = ots[i++];
-    }
-    /* u becomes the end of the unknowns, and the sorted array */
-    u = sortuot(ots, i);
-    j -= hdr->rootnum + hdr->srootnum;
-    if((otbsearch(ots+2, ots, sizeof(offtype), u, cmpot)) != ots+2) printf("not sorted correctly\n");
-    for(i=u; i < (u + hdr->rootnum + hdr->srootnum);)
-        ots[i++] = ots[j++];
-    j = i;
+		return getdef(defs, rootnames[i].name);
+	}
 
-    /* start i at the beginning of the unsorted/unvisited offtypes */
-    for(i=u;i<j && j<z; ++i) {
-        if(ots[i].t == DatNULL) {
-            ots[i--] = ots[--j];
-            continue;
-        }
-
-        match = otbsearch(ots+i, ots, sizeof(offtype), u, cmpot);
-        if(match != NULL) {
-            if(match->t != DatNULL && match->t != ots[i].t) {
-                fprintf(stderr, "%08x %-15s is double-defined: %s (%8x %s, %8x %s)\n", 
-                        match->o-0x20, ddefs[match->t].name, ddefs[ots[i].t].name, 
-                        match->p-0x20, ddefs[match->pt].name, ots[i].p-0x20, ddefs[ots[i].pt].name);
-                continue;
-            } else {
-                t = match->v;
-                *match = ots[i];
-                match->v = (t==1)?1:match->v;
-                ots[i--] = ots[--j];
-                if(match->v==1) continue;
-            }
-        } else {
-            fprintf(stderr, "%08x %-15s weird offset not found in relocation table or root nodes: (%8x %s)\n", 
-                    ots[i].o-0x20, ddefs[ots[i].t].name, ots[i].p-0x20, ddefs[ots[i].pt].name);
-            match = ots+i;
-        }
-
-        if(match->o-0x20 > hdr->datasz) {
-            fprintf(stderr, "%08x %-15s offset exceeds datasz %8x (%8x %s)\n", 
-                    match->o-0x20, ddefs[match->t].name, hdr->datasz, match->p-0x20, ddefs[match->pt].name);
-            match->v=1;
-            continue;
-        }
-#ifdef DEBUG
-        printf("%-11s %8x %8x %d", ddefs[match->t].name, match->o-0x20, match->p-0x20, match->z);
-#endif
-        while(match->v!=1) {
-            /* use offtype.v as negative counter for array */
-            t=j+ddefs[match->t].trav(
-                    ddefs[match->t].vars,
-                    buf+match->o + (-match->v)*ddefs[match->t].size, 
-                    ots+j,
-                    match);
-#ifdef DEBUG
-            while(j<t) { 
-                if(match->o % 4) 
-                    fprintf(stderr, "%08x %-15s offset isn't aligned: (%8x %s)\n", 
-                            match->o-0x20, ddefs[match->t].name, match->p-0x20, ddefs[match->pt].name);
-                ots[j].p  = match->o;
-                ots[j].pt = match->t;
-                ++j;
-            }
-#else
-            j=t;
-#endif
-            ++(match->v);
-        
-            if(j+16>=z) {
-                printf("warning: too many cooks!\n");
-                match=realloc(ots, z*2);
-                if(match) {
-                    ots = match;
-                    z*=2;
-                } else {
-                    fprintf(stderr, "Realloc fail\n");
-                    z=j;
-                    match->v=1;
-                }
-            }
-        }
-#ifdef DEBUG
-        printf("\n");
-#endif
-
-    }
-    /* last unique sort, not really necessary because you can "| sort -u", but what reason is there to leave the output unsorted? */
-    u = sortuot(ots, j);
-    
-    for(i=0; i<hdr->reltnum; ++i) {
-        j = *(uint32_t*)(body+be32toh(relt[i]));
-        j = be32toh(j)-0x20;
-        *(uint32_t*)(body+be32toh(relt[i])) = be32toh(j);
-    }
-    for(i=0; i<u; ++i) {
-        ots[i].o -= 0x20;
-    }
-
-    *ddata = (DData){ buf, ots, hdr->filesz+1, z, u };
-    return 0;
+	return NULL;
 }
 
-int 
-cmpot(const void* a, const void* b) { 
-    return  (((offtype*)a)->o > ((offtype*)b)->o) - 
-        (((offtype*)a)->o < ((offtype*)b)->o);
+Defo *
+g_hdr(Defo *defo, void *data, void *infop) {
+	Def *def = defo->def;
+	Def *rootdef;
+	Defo *ret, *tmp;
+	DefL *custrootdef;
+	genHdrInfo *ghi = infop;
+	unsigned char *buf = data;
+	int i, reti=0;
+	unsigned int ibuf;
+	unsigned int filesz, bodysz, reltnum, rootnum, xrefnum, strtabsz;
+	unsigned int rootoff;
+
+	printf("g_hdr\n");
+	unpack(def, data, &filesz, 0);
+	strtabsz = filesz - 0x20;
+	unpack(def, data, &bodysz, 1);
+	strtabsz -= bodysz;
+	unpack(def, data, &reltnum, 2);
+	strtabsz -= reltnum * 4;
+	rootoff = filesz - strtabsz;
+	unpack(def, data, &rootnum, 3);
+	unpack(def, data, &xrefnum, 4);
+	strtabsz -= (rootnum + xrefnum) * 8;
+	ghi->strs = buf + filesz - strtabsz;
+
+	ret = calloc(rootnum, sizeof(Defo));
+	rootdef = getdef(ghi->defs, "root");
+	for(i=0; i<rootnum; ++i) {
+		printf("loopey\n");
+		if((custrootdef = genroot(ghi->defx, ghi->defs, ghi->strs, data, rootoff)) != NULL) {
+			printf("  custrootdef %s\n", custrootdef->def.type);
+			ret[i].def = &custrootdef->def;
+			ghi->defx = custrootdef;
+		} else {
+			ret[i].def = rootdef;
+		}
+		ret[i].off = rootoff + i * rootdef->size;
+	}
+
+	reti = rootnum;
+	for(i=0; i<rootnum; ++i) {
+		tmp = ret[i].def->gen(&ret[i], data, infop);
+		if(!tmp) continue;
+		if((reti = defoappend(&ret, reti, tmp, 0)) == 0) {
+			eprintf("append Defo array");
+			free(tmp);
+			free(ret);
+			return NULL;
+		}
+	}
+
+	return ret;
 }
 
 int
-sortuot(offtype* ots, size_t nmemb) {
-    int dup = 0, i;
-    qsort(ots, nmemb, sizeof(offtype), cmpot);
-    for(i=0; i<(nmemb-1); ++i) {
-        if(cmpot(ots+i, ots+i+1) == 0) {
-            ots[i].o = 0xFFFFFFFF;
-            ots[i+1].v |= ots[i].v;
-            if(ots[i+1].t==DatNULL) 
-                ots[i+1].t = ots[i].t;
-            ++dup;
-        }
-    }
-    if(dup==0) return nmemb;
-    qsort(ots, nmemb, sizeof(offtype), cmpot);
-    return nmemb-dup;
-}
+axtoi(const char *str) {
+	unsigned int ret, pret, i;
 
-int 
-pfonly(char* file_s, char* type_s) {
-    uint32_t i, type;
-    DData ddata = { 0 };
-
-    if(type_s) {
-        for(i=1; i < LEN(ddefs); i++) {
-            if(!strcmp(type_s, ddefs[i].name)) {
-                type = i;
-                break;
-            }
-        }
-    } else {
-        type = DatLast;
-    }
-
-    if(datreadot(&ddata, file_s)) return 1;
-
-    for(i=0; i<ddata.otm; ++i) {
-        if(type != DatLast && type != ddata.offtypes[i].t) continue;
-        printf("-- %08x %s",
-            ddata.offtypes[i].o,
-            ddefs[ddata.offtypes[i].t].name
-        );
-        if(ddata.offtypes[i].z > 1) {
-            if(ddefs[ddata.offtypes[i].t].size) {
-                printf("[0:%d]", ddata.offtypes[i].z);
-            } else {
-                printf("[%d]", ddata.offtypes[i].z);
-                ddata.offtypes[i].z = 1;
-            }
-        }
-        printf(" --\n");
-        ddefs[ddata.offtypes[i].t].print(
-            0,
-            ddefs[ddata.offtypes[i].t].vars, 
-            ddata.data + 0x20 + ddata.offtypes[i].o, 
-            (DatStructVar){ 0 }
-        );
-        for(ddata.offtypes[i].v = 1; ddata.offtypes[i].v < ddata.offtypes[i].z; ++(ddata.offtypes[i].v)) {
-            printf("-- %08x %s[%d:%d] --\n", 
-                   ddata.offtypes[i].o,
-                   ddefs[ddata.offtypes[i].t].name,
-                   ddata.offtypes[i].v,
-                   ddata.offtypes[i].z
-            );
-            ddefs[ddata.offtypes[i].t].print(
-                0,
-                ddefs[ddata.offtypes[i].t].vars, 
-                ddata.data + 0x20 + ddata.offtypes[i].o + (ddata.offtypes[i].v*ddefs[ddata.offtypes[i].t].size), 
-                (DatStructVar){ 0 }
-            );
-        }
-    }
-
-    free(ddata.offtypes);
-    free(ddata.data);
-    return 0;
-}
-
-int
-pfoffs(char* file_s) {
-    int i;
-    DData ddata = { 0 };
-
-    if(datreadot(&ddata, file_s)) return 1;
-
-    for(i=0; i<ddata.otm; ++i) {
-        if(ddata.offtypes[i].t < 0) continue;
-        if(ddata.offtypes[i].z > 1 && ddefs[ddata.offtypes[i].t].size > 0x8) 
-            /* this is arbitrary, but if the struct is only 2 words big, 
-             * I didn't need it to tell me where the beginning of each struct was in the array */
-            for(ddata.offtypes[i].v=0; ddata.offtypes[i].v < ddata.offtypes[i].z; ++(ddata.offtypes[i].v))
-                printf("%08x %s[%d:%d]\n", 
-                    ddata.offtypes[i].o + ddata.offtypes[i].v*ddefs[ddata.offtypes[i].t].size,
-                    ddefs[ddata.offtypes[i].t].name,
-                    ddata.offtypes[i].v,
-                    ddata.offtypes[i].z);
-        else {
-            printf("%08x %s", ddata.offtypes[i].o, ddefs[ddata.offtypes[i].t].name);
-            if(ddata.offtypes[i].z > 1)
-                printf("[%d]", ddata.offtypes[i].z);
-            printf("\n");
-        }
-    }
-
-    free(ddata.offtypes);
-    free(ddata.data);
-    return 0;
-}
-
-int 
-pfroot(char* file_s) {
-    uint32_t i, hdr[8], root;
-    char* strt;
-    uint8_t* buf;
-    FILE* file;
-
-    file = fopen(file_s, "r");
-    if(!file) return 2;
-
-    fread(hdr, sizeof(uint32_t), 8, file);
-    for(i=0; i<5; ++i) hdr[i] = be32toh(hdr[i]);
-    root = hdr[1]+(hdr[2]*sizeof(uint32_t));
-    fseek(file, 0x20+root, SEEK_SET);
-    buf = malloc((hdr[3]+hdr[4])*ddefs[DatRoot].size);
-    fread(buf, ddefs[DatRoot].size, hdr[3]+hdr[4], file);
-    hdr[5] = hdr[0] - (root+((hdr[3]+hdr[4])*ddefs[DatRoot].size));
-    strt = malloc(hdr[5]);
-    fread(strt, hdr[5], 1, file);
-
-    if(hdr[3]) {
-        printf("-- %08x %s[%d] --\n", root+i*ddefs[DatRoot].size, ddefs[DatRoot].name, hdr[3]);
-        ddefs[DatRoot].print(0, ddefs[DatRoot].vars, buf, (DatStructVar){ DatHdr, strt, hdr[3] } );
-    }
-    if(hdr[4]) {
-        printf("-- %08x %s[%d] --\n", root+i*ddefs[DatRoot].size, ddefs[DatRoot].name, hdr[4]);
-        ddefs[DatRoot].print(0, ddefs[DatRoot].vars, buf+(hdr[3]*ddefs[DatRoot].size), (DatStructVar){ DatHdr, strt, hdr[4] } );
-    }
-
-    free(buf);
-    fclose(file);
-    return 0;
-}
-
-int 
-pfstruct(char* file_s, uint32_t type, uint32_t off) {
-    FILE* file;
-    uint8_t* buf;
-    if(type==DatNULL) return 3;
-    file = fopen(file_s, "r");
-    if(!file) return 2;
-    buf = malloc(ddefs[type].size);
-    fseek(file, off, SEEK_SET);
-    fread(buf, ddefs[type].size, 1, file);
-    ddefs[type].print(0, ddefs[type].vars, buf, (DatStructVar){ 0 });
-
-    free(buf);
-    fclose(file);
-    return 0;
+	for(ret = 0, i = 0; str[i]; ++i) {
+		ret *= 0x10;
+		switch(str[i]) {
+		case 'F':
+		case 'f': ++ret;
+		case 'E':
+		case 'e': ++ret;
+		case 'D':
+		case 'd': ++ret;
+		case 'C':
+		case 'c': ++ret;
+		case 'B':
+		case 'b': ++ret;
+		case 'A':
+		case 'a': ++ret;
+		case '9': ++ret;
+		case '8': ++ret;
+		case '7': ++ret;
+		case '6': ++ret;
+		case '5': ++ret;
+		case '4': ++ret;
+		case '3': ++ret;
+		case '2': ++ret;
+		case '1': ++ret;
+		case '0':
+				  break;
+		default:
+				  return pret;
+		}
+		pret = ret;
+	}
+	return ret;
 }
 
 void
-documentation() {
-    int i;
-    for(i=1; i<DatLast; ++i) { 
-        if(!ddefs[i].vars) continue;
-        printf("%s {\n", ddefs[i].name);
-        documentrec(ddefs[i].vars, 1);
-        printf("}\n");
-    }
+cleanupdefs(Def **defp, DefL *lst) {
+	Def *defs;
+	DefL *nlst, *olst = lst;
+	int n;
+
+	for(n = 0; lst; lst = nlst, ++n) nlst = lst->next;
+	defs = calloc(sizeof(Def), n+1);
+	flattendefL(defs, olst);
+	qsort(defs, n, sizeof(Def), defcmp);
+	resolvdefs(defs);
+	*defp = defs;
 }
 
 void
-documentrec(DatStructVar* dvp, int lvl) {
-    int i, j;
-    char* atname[] = {
-        [AtByte]  = "byte ",
-        [AtHalf]  = "half ",
-        [AtWord]  = "word ",
-        [AtFloat] = "float",
-        [AtOff]   = "off  ",
-        [AtArr]   = "array",
-        [AtSub]   = "sub  "
-    };
-    for(i=0; dvp->type; ++dvp) {
-        for(j=0; j<lvl; ++j) printf("    ");
-        printf("%s ", atname[dvp->type]);
-        
-        if(dvp->name) 
-            printf("\"%s\" ", dvp->name);
-        else
-            printf("\"unknown%02x\" ", i);
-        
-        switch(dvp->type) {
-        case AtOff:
-        case AtArr:
-            printf("(%s) ", ddefs[dvp->extra.ui].name); break;
-        case AtSub:
-            if(dvp->extra.sv->extra.ui > 1)
-                printf("[%d]", dvp->extra.sv->extra.ui);
-            printf(" {\n");
-            documentrec(dvp->extra.sv+1, lvl+1);
-            for(j=0; j<lvl; ++j) printf("    ");
-            printf("}");
-        default: break;
-        }
+cmdloop(Defo *defos, genHdrInfo *ghi, void *data) {
+	char line[512];
+	unsigned char *buf = data;
+	int i, typelen, scanned, nread;
+	unsigned int arr;
+	Def *defs = ghi->defs, *xdef;
+	Defo defo;
+	int hfd;
 
-        printf("\n");
+	typelen = maxtypelen(defs);
+	xdef = getdef(defs, "x");
 
-        switch(dvp->type) {
-        case AtByte: i+=1; break;
-        case AtHalf: i+=2; break;
-        case AtSub:  i+=dvp->extra.sv->type*dvp->extra.sv->extra.ui; break;
-        default:     i+=4; break;
-        }
-    }
+	while(1) {
+		if((nread = read(STDIN_FILENO, line, 512)) <= 0)
+			return;
+		for(i=0; line[i] !='\n'; ++i);
+		line[i] = 0;
+		if(line[0] == 0) continue;
+		--nread;
+		scanned = 0;
+
+		defo.off = MAXOFF;
+		if(scanned < nread && ((i = scanoff(&defo.off, line+scanned)) <= 0 || defo.off == MAXOFF)) {
+			fprintf(stderr, "Failed to scan off %d %x\n", i, defo.off);
+			continue;
+		}
+		scanned += i;
+
+		defo.def = NULL;
+		if(scanned < nread && ((i = scantype(defs, &(defo.def), typelen, line+scanned)) <= 0 || defo.def == NULL)) {
+			fprintf(stderr, "Unrecognized type \"%s\"\n", line);
+			continue;
+		}
+		scanned += i;
+
+		arr = 1;
+		if(scanned < nread && ((i = scanarr(&arr, line+scanned)) <= 0 || arr == 0)) {
+			fprintf(stderr, "Weird array string \"%s\"\n", line);
+			continue;
+		}
+		scanned += i;
+
+		if(defo.def->print) {
+			if(arr != -1) {
+				while(arr > 0) {
+					defo.def->print(&defo, buf+defo.off);
+					defo.off += defo.def->size;
+					--arr;
+				}
+			} else {
+				if(!defo.def->null) {
+					fprintf(stderr, "Type %s does not support storage as null terminated array\n", defo.def->type);
+					continue;
+				}
+				while(!defo.def->null(&defo, buf+defo.off)) {
+					defo.def->print(&defo, buf+defo.off);
+					defo.off += defo.def->size;
+				}
+			}
+			putchar('\0');
+			if(fflush(NULL) != 0) eprintf("fflush:");
+		}
+		if(fflush(NULL) != 0) eprintf("fflush:");
+	}
+}
+
+int 
+defcmp(const void *a, const void *b) {
+	return strcmp(((Def*)a)->type, ((Def*)b)->type);
+}
+
+void
+destroydef(Def *def) {
+	int mem;
+
+	for(mem=0; def->format[mem]; ++mem) {
+		if(def->mems[mem])
+			free(def->mems[mem]);
+	}
+
+	free(def->off);
+	def->off = NULL;
+	free(def->extra);
+	def->extra = NULL;
+	free(def->mems);
+	def->mems = NULL;
+	free(def->format);
+	def->format = NULL;
+	free(def->type);
+	def->type = NULL;
+}
+
+void
+destroydefs(Def *defs) {
+	while(defs->type) {
+		destroydef(defs);
+		++defs;
+	}
+}
+
+void
+eprintf(const char *fmt, ...) {
+	va_list ap;
+
+	va_start(ap, fmt);
+	vfprintf(stderr, fmt, ap);
+	va_end(ap);
+
+	if(fmt[0] != '\0' && fmt[strlen(fmt)-1] == ':') {
+		fputc(' ', stderr);
+		perror(NULL);
+	}
+
+	fputc('\n', stderr);
+	exit(EXIT_FAILURE);
+}
+
+void
+flattendefL(Def *defs, DefL *lst) {
+	DefL *nlst = lst->next;
+	int i;
+
+	for(i = 0; lst; lst = nlst, ++i) {
+		nlst = lst->next;
+		memcpy(defs+i, &(lst->def), sizeof(Def));
+		free(lst);
+	}
+}
+
+int
+getarr(char *str) {
+	char *e;
+	int ret = FARR;
+
+	if(str[0] == '*')
+		return (str[1] == 0) ? NARR : 0;
+	e = str;
+	while((*e) && *e != ']') {
+		if(!isalnum(*e)) return 0;
+		if((ret == FARR) && !isdigit(*e))
+			ret = VARR;
+		++e;
+	}
+
+	return ret;
+}
+
+Def *
+getdef(Def *defs, char *type) {
+	Def *def;
+
+	for(def = defs; def->type; ++def) {
+		if(strcmp(def->type, type)==0)
+			return def;
+	}
+	return NULL;
+}
+
+void
+initdef(Def *def, char *str) {
+	char* c;
+	int memn = 0;
+	while((*str) && isspace(*str)) ++str;
+	if(!(*str)) return;
+	c = str;
+
+	while((*c) && !isspace(*c)) ++c;
+	if(!(*c)) eprintf("invalid type definition: there's only one word");
+	def->type = calloc(1, c-str+1);
+	strncpy(def->type, str, c-str);
+	while((*c) && isspace(*c)) ++c;
+	if(!(*c)) eprintf("invalid format string: expected FORMAT got NULL");
+	str = c;
+
+	while((*c) && !isspace(*c)) {
+		switch(*c) {
+		case 'b':
+		case 'w':
+		case 'x':
+		case 'f':
+		case 'p':
+		case '.':
+		case ':':
+		case '?': ++c; break;
+		default:  eprintf("Invalid FORMAT character %c", *c);
+		}
+	}
+	memn = c - str;
+
+	def->format = calloc(memn, sizeof(char*));
+	strncpy(def->format, str, memn);
+	def->mems = calloc(memn, sizeof(char*));
+	def->extra = calloc(memn, sizeof(Defx));
+	def->off = calloc(memn, sizeof(int));
+
+	parsemems(def, c);
+	return;
+}
+
+int
+maxtypelen(Def *defs) {
+	int i, l;
+
+	for(i = 0; defs->type; ++defs) {
+		if((l = strlen(defs->type)) > i)
+			i = l;
+	}
+	return i;
+}
+
+int
+n_generic(Defo *defo, void *data) {
+	Def *def = defo->def;
+	unsigned int off = defo->off;
+	unsigned int ibuf;
+	unsigned char *buf = data;
+
+	unpack(def, buf, &ibuf, 0);
+	return !ibuf;
+}
+
+DefL *
+newdefL(DefL *next, char *line) {
+	DefL tmpdef = { 0 };
+	DefL *lst;
+
+	initdef(&(tmpdef.def), line);
+	if(!tmpdef.def.type) return NULL;
+	lst = calloc(1, sizeof(DefL));
+	memcpy(lst, &tmpdef, sizeof(DefL));
+	lst->next = next;
+	return lst;
 }
 
 void 
+p_generic(Defo *defo, void *data) {
+	Def *def = defo->def;
+	unsigned int off = defo->off;
+	char *f, *fmt = def->format;
+	unsigned int ibuf, flags;
+	float fbuf;
+	int i;
+
+	for(f = fmt, i = 0; *f; ++f, ++i) {
+		printf("%08x %c %*s : ", 
+		       off + def->off[i], 
+		       *f, 
+		       def->meml, 
+		       def->mems[i]);
+
+		switch(*f) {
+		case 'b':
+		case '.':
+		case 'w':
+		case 'x':
+		case ':':
+			unpack(def, data, &ibuf, i);
+			printf("%x", ibuf);
+			break;
+		case 'f':
+			unpack(def, data, &fbuf, i);
+			printf("%f", fbuf);
+			break;
+		case '?':
+			printf("%08x %s 1", 
+					off + def->off[i], 
+					def->extra[i].def->type);
+			break;
+		case 'p':
+			unpack(def, data, &ibuf, i);
+			printf("%08x %s ",
+					ibuf + 0x20,
+					def->extra[i].def->type);
+			switch(def->extra[i].flags) {
+			case FARR:
+				printf("%d", def->extra[i].ui);
+				break;
+			case VARR:
+				unpack(def, data, &ibuf, def->extra[i].ui);
+				printf("%d", ibuf);
+				break;
+			case NARR:
+				printf("*");
+				break;
+			}
+			break;
+		}
+		printf("\n");
+	}
+}
+
+void 
+p_hdr(Defo *defo, void *data) {
+	Def *def = defo->def;
+	unsigned int off = defo->off;
+	char *f;
+	unsigned int ibuf;
+	int hdrsz = 0x20, rootsz = 0x8, offsz = 0x4, filesz;
+	int relt, roots, xrefs, strings;
+	int i;
+
+	for(f = def->format, i = 0; *f; ++f, ++i) {
+		printf("%08x %c %*s : ", 
+		       off + def->off[i], 
+		       *f, 
+		       def->meml, 
+		       def->mems[i]);
+		unpack(def, data, &ibuf, i);
+		printf("%x", ibuf);
+		printf("\n");
+
+		switch(i) {
+		case 0:
+			filesz = ibuf;
+			break;
+		case 1:
+			relt = hdrsz + ibuf;
+			break;
+		case 2: 
+			printf("         p %*s : %08x p %d\n", def->meml, "reltbl", relt, ibuf);
+			roots = relt + ibuf*offsz;
+			break;
+		case 3:
+			printf("         p %*s : %08x root %d\n", def->meml, "rootarr", roots, ibuf);
+			xrefs = roots + ibuf*rootsz;
+			break;
+		case 4:
+			printf("         p %*s : %08x root %d\n", def->meml, "xrefarr", xrefs, ibuf);
+			strings = xrefs + ibuf*rootsz;
+			break;
+		case 5:
+			printf("         p %*s : %08x c %d\n", def->meml, "strings", strings, filesz - strings);
+			break;
+		}
+	}
+	if(fflush(NULL) != 0) eprintf("fflush:");
+}
+
+void
+p_char(Defo *defo, void *data) {
+	Def *def = defo->def;
+	unsigned int off = defo->off;
+	if(*(char*)data == 0)
+		printf("\n");
+	else
+		printf("%c", *(char*)data);
+	fflush(NULL);
+}
+
+void
+parsemems(Def *def, char *str) {
+	char *b, *e, *names, *f;
+	int mem, last;
+
+	/* remove leading whitespace */
+	while((*str) && isspace(*str)) ++str;
+	if(!(*str)) return;
+	e = str;
+	while(*e) ++e;
+	/* remove trailing whitespace */
+	do { --e; } while (isspace(*e));
+	++e;
+
+	/* allocate new string */
+	names = calloc(1, e - str + 1);
+	strncpy(names, str, e - str);
+
+	for(b = names, f = def->format, mem = 0, last = 0;
+			*f && *b; 
+			++mem, ++f) {
+		while(isspace(*b)) ++b;
+		switch(*f) {
+		case 'p': 
+		case '?':
+			if(*b == '[') {
+				++b; e = b;
+				while((*e) && *e != ']') ++e;
+				if(!(*e)) eprintf("Reached EOL while parsing array: %s", b);
+				*e = 0;
+
+				def->extra[mem].flags  = getarr(b);
+				if(!def->extra[mem].flags) 
+					eprintf("Invalid array size specifier: \"%s\"", b);
+				else if(def->extra[mem].flags == FARR)
+					def->extra[mem].ui = atoi(b);
+				else if(def->extra[mem].flags == VARR) {
+					def->extra[mem].s = calloc(1, e-b+1);
+					strncpy(def->extra[mem].s, b, e-b);
+				}
+				b = e+1;
+				while(isspace(*b)) ++b;
+			}
+			if(last) eprintf("Cannot leave %c name empty, needs TYPE specifier (at format[%d])", *f, mem);
+			if(*b == '(') {
+				++b; e = b;
+				while((*e) && *e != ')') ++e;
+			} else if(*f == '?')
+				eprintf("Need to specify TYPE for inline (?): \"%s\"", b);
+			if(!(*e)) eprintf("Reached EOL while parsing TYPE: %s", b);
+			if(b == e) eprintf("Error parsing TYPE in line: %s", str);
+			def->extra[mem].type = calloc(1, e-b+1);
+			strncpy(def->extra[mem].type, b, e-b);
+			b = e+1;
+			while(isspace(*b)) ++b;
+		case 'b':
+		case 'w':
+		case 'x':
+		case 'f': 
+			if(last) continue;
+			e = b;
+			while((*e) && !isspace(*e)) ++e;
+			last = !(*e);
+			if(b != e) {
+				*e = 0;
+				def->mems[mem] = calloc(1, e-b+1);
+				strncpy(def->mems[mem], b, e-b);
+				if(def->meml < (e-b))
+					def->meml = e-b;
+			}
+			if(!last) b = e + 1;
+			break;
+		case '.':
+		case ':':
+			def->mems[mem] = NULL;
+			break;
+		default: eprintf("Unrecognized char in format string: %s", def->format);
+		}
+	}
+	free(names);
+}
+
+void
+printdef(Def *def) {
+	int mem;
+	printf("TYPE: %s\n", def->type);
+	for(mem=0; def->format[mem]; ++mem) {
+		printf("%04x %c %*s",
+				def->off[mem],
+				def->format[mem],
+				def->meml,
+				(def->mems[mem]) ? def->mems[mem] : "");
+
+		switch(def->format[mem]) {
+		case 'p':
+			if(def->extra[mem].flags == NARR)
+				printf(" [*]");
+			else if(def->extra[mem].flags == FARR)
+				printf(" [%d]", def->extra[mem].ui);
+			else if(def->extra[mem].flags == VARR)
+				printf(" [%s]", def->mems[def->extra[mem].ui]);
+		case '?':
+			printf(" (%s)", def->extra[mem].def->type);
+		}
+		printf(";\n");
+	}
+	printf("size: %d\n", def->size);
+}
+
+void
+printdefs(Def *defs) {
+	while(defs->type) {
+		printdef(defs);
+		printf("\n");
+		++defs;
+	}
+}
+
+void
+protos2lst(DefL **lstp) {
+	DefL *lst, *nlst;
+	int i;
+
+	lst = *lstp;
+	for(i = 0; i < LEN(protos); ++i) {
+		if((nlst = newdefL(lst, protos[i].str)) == NULL)
+			continue;
+		nlst->def.print = protos[i].print;
+		nlst->def.null = protos[i].null;
+		nlst->def.gen = protos[i].gen;
+		lst = nlst;
+	}
+	*lstp = lst;
+}
+
+void
+readdat(void **dst, char *file) {
+	int fd, filesz, hdrsz = 0x20;
+	unsigned char *buf;
+
+	if((fd = open(file, O_RDONLY)) == -1) {
+		fprintf(stderr, "Can't open file %s\n", file);
+		return;
+	}
+
+	buf = calloc(1, hdrsz);
+	if(read(fd, buf, hdrsz) <= 0) {
+		fprintf(stderr, "Read error\n");
+		free(buf);
+		return;
+	}
+
+	filesz = buf[0] << 24 | buf[1] << 16 | buf[2] << 8 | buf[3];
+	buf = realloc(buf, filesz);
+	if(!buf) eprintf("memory");
+
+	if(read(fd, buf+hdrsz, filesz-hdrsz) <= 0) {
+		fprintf(stderr, "Read error\n");
+		free(buf);
+		return;
+	}
+
+	close(fd);
+	*dst = buf;
+}
+
+void
+readdefs(Def **defp) {
+	Def *defs = NULL;
+	DefL *lst = NULL;
+
+	protos2lst(&lst);
+	cleanupdefs(&defs, lst);
+	if(debug > 0)
+		printdefs(defs);
+
+	*defp = defs;
+}
+
+void
+resolvdefs(Def *defs) {
+	Def *def;
+	Defx *xp;
+	char *f = NULL;
+	int unresolved, i;
+
+	for(def = defs; def->type; ++def) {
+		for(f = def->format, i = 0; *f; ++f, ++i) {
+			xp = &(def->extra[i]);
+			if(*f == 'p' || *f == '?') {
+				resolvtype(defs, &(xp->type));
+				xp->flags |= RSVT;
+			}
+			if(*f == 'p' && xp->flags == VARR) {
+				resolvmem(def, &(xp->s));
+				xp->flags |= RSVA;
+			}
+		}
+	}
+
+	for(unresolved = -1, i = 0; 
+			unresolved != 0; 
+			unresolved = i, i = 0) {
+		for(def = defs; def->type; ++def)
+			i += resolvsize(defs, def);
+		if(unresolved && i == unresolved) {
+			fprintf(stderr, "Possible circular dependancy in inline structs");
+			for(def = defs; def; ++def) {
+				if(resolvsize(defs, def))
+					fprintf(stderr, "%s\n", def->type);
+			}
+			exit(EXIT_FAILURE);
+		}
+	}
+
+	for(def = defs; def->type; ++def)
+		resolvnullnames(def);
+}
+
+void
+resolvmem(Def *def, void *mem) {
+	char *f;
+	int i;
+	for(f = def->format, i = 0; *f; ++f, ++i) {
+		switch(*f) {
+		case 'b':
+		case 'w':
+		case 'x':
+		case '.':
+		case ':':
+			if(strcmp(def->mems[i], *(char**)mem)==0)
+				goto found;
+		default:
+			continue;
+		}
+	}
+	eprintf("Couldn't resolve array length \"%s\" to member name in %s",
+			*(char*)mem, def->type);
+
+found:
+	free(*(char**)mem);
+	*(unsigned int*)mem = i;
+}
+
+void
+resolvnullnames(Def *def) {
+	int i,d;
+	for(i = def->size, d = 1; i > 0; i >>= 4, ++d);
+	for(i = 0; def->format[i]; ++i) {
+		if(def->mems[i]) continue;
+		def->mems[i] = calloc(1, 4 + d);
+		sprintf(def->mems[i], "unk%0*x", d, def->off[i]);
+	}
+
+	if(def->meml < 3+d)
+		def->meml = 3+d;
+}
+
+int
+resolvsize(Def *defs, Def *def) {
+	char *f;
+	int size = 0, i;
+	if(def->size) return 0;
+
+	for(f = def->format, i = 0; *f; ++f, ++i) {
+		def->off[i] = size;
+		switch(*f) {
+		case 'x':
+		case 'f':
+		case 'p':
+		case ':':
+			size += 4; break;
+		case 'w':
+			size += 2; break;
+		case 'b':
+		case '.':
+			size += 1; break;
+		case '?':
+			if(def->extra[i].def->size == 0) return 1;
+			size += def->extra[i].def->size;
+			break;
+		default: eprintf("format character %c not recognized", *f);
+		}
+	}
+	def->size = size;
+	return 0;
+}
+
+void
+resolvtype(Def *defs, char **type) {
+	Def *def = defs;
+
+	for(def = defs; def->type; ++def) {
+		if(strcmp(def->type, *type)==0)
+			goto found;
+	}
+	eprintf("Couldn't resolve TYPE \"%s\"", *type);
+
+found:
+	free(*type);
+	(*(Def**)type) = def;
+}
+
+void
+unpack(Def *def, void *src, void *dst, int mem) {
+	unsigned char *data = src;
+	unsigned int ibuf;
+	float fbuf;
+
+	data += def->off[mem];
+
+	switch(def->format[mem]) {
+	case '.':
+	case 'b':
+		ibuf = data[0];
+		*(unsigned int*)dst = ibuf;
+		break;
+	case 'w':
+		ibuf = data[0] << 8 | data[1];
+		*(unsigned int*)dst = ibuf;
+		break;
+	case ':':
+	case 'x':
+	case 'f':
+	case 'p':
+		ibuf = data[0] << 24 | data[1] << 16 | data[2] << 8 | data[3];
+		*(unsigned int*)dst = ibuf;
+		break;
+	case '?':
+		memcpy(dst, data, 
+				((def->format[mem+1]) ? def->off[mem+1] : def->size) - def->off[mem]);
+	}
+}
+
+void
 usage() {
-    printf(
-    "Usage: %s -[ihrobtz] FILE\n"
-    "  -i OFF TYPE  prints struct of TYPE at OFF in body\n"
-    "  -h           prints header\n"
-    "  -r           prints roots\n"
-    "  -o           prints struct offsets discovered by relocation table\n"
-    "  -b           prints struct offsets discovered by known node types\n"
-    "  -t TYPE      prints all structs of TYPE (if TYPE is invalid or omitted, prints all structs)\n"
-    "  -z           prints structure sizes\n",
-    exename);
-    exit(0);
+	printf("usage: datbody DATFILE\n");
 }
 
-int 
-main(int argc, char** argv) {
-    char* file_s = NULL, *type_s = NULL, *off_s = NULL;
-    enum { ModeInsp, ModeRoot, ModeHdr, ModeBody, ModeType, ModeSize, ModeDoc };
-    uint32_t mode = ModeBody;
-    int i;
+int
+scanarr(unsigned int *arrp, char *line) {
+	unsigned int i;
+	char *c = line;
 
-    for(i = strlen(argv[0])-1; i>=0 && argv[0][i] != '/'; --i);
-    exename = &(argv[0][i+1]);
-    
-    definit();
+	while(*c && isspace(*c)) ++c;
+	if(!(*c)) {
+		*arrp = 1;
+		return c - line;
+	}
 
-    if(argc<2) usage();
-    for(i = 1; i < argc; ++i) {
-        if(argv[i][0] == '-')
-            switch(argv[i][1]) {
-            case 'i': mode = ModeInsp; off_s = argv[++i]; type_s = argv[++i]; break;
-            case 'h': mode = ModeHdr;  break;
-            case 'r': mode = ModeRoot; break;
-            case 'b': mode = ModeBody; break;
-            case 't': mode = ModeType; type_s = (argc==++i)?NULL:argv[i]; break;
-            case 'z': for(i=1; i<LEN(ddefs); ++i) printf("%s %x\n", ddefs[i].name, ddefs[i].size); return 0;
-            case 'd': documentation(); return 0;
-            default:  printf("Unrecognized option %s\n", argv[i]);
-                      usage();
-            }
-        else
-            file_s = argv[i];
-    }
-    
-    if(!file_s) {
-        printf("You need to specificy a file\n");
-        usage();
-    }
-    
-    switch(mode) {
-    case ModeInsp: return pfbody(file_s, type_s, off_s);
-    case ModeRoot: return pfroot(file_s);
-    case ModeHdr:  return pfstruct(file_s, DatHdr, 0);
-    case ModeBody: return pfoffs(file_s);
-    case ModeType: return pfonly(file_s, type_s);
-    }
+	if(*c == '*') {
+		*arrp = -1;
+		return c - line + 1;
+	}
 
-    return 0;
+	i = atoi(c);
+	*arrp = i;
+	while(isdigit(*c)) ++c;
+	return c - line;
 }
 
+int
+scanoff(unsigned int *offp, char *line) {
+	unsigned int i;
+	char *c = line;
+
+	while(*c && isspace(*c)) ++c;
+	if(!(*c)) return 0;
+	if(c[0] == '0' && c[1] == 'x')
+		i = axtoi(c+2);
+	else
+		i = axtoi(c);
+
+	*offp = i;
+	while(isxdigit(*c)) ++c;
+	return c - line;
+}
+
+int
+scantype(Def *defs, Def **defp, int max, char *line) {
+	Def *def = defs;
+	char *c;
+	int i = 0, n;
+
+	c = line;
+	while((*c) && isspace(*c)) ++c;
+	if(!(*c)) return 0;
+
+	for(i = 0; i <= max; ++i) {
+		if((!(c[i]) || isspace(c[i])) && def->type[i] == '\0') {
+			*defp = def;
+			return c - line + i;
+		}
+
+		while(def->type && (n = strncmp(def->type, c, i+1)) < 0) ++def;
+		if(!(def->type) || n != 0) return 0;
+	}
+	return 0;
+}
+
+int
+main(int argc, char *argv[]) {
+	unsigned char *buf = NULL;
+	Def *defs;
+	genHdrInfo ghi;
+	Defo *defos;
+
+	ARGBEGIN {
+	case 'v': ++debug;
+	} ARGEND;
+
+	if(argc < 1) {
+		usage();
+		exit(EXIT_SUCCESS);
+	}
+
+	readdefs(&defs);
+	readdat((void**)&buf, argv[0]);
+	ghi = (genHdrInfo){ defs, NULL, NULL };
+	gentree(&defos, &ghi, buf);
+
+	cmdloop(defos, &ghi, buf);
+	printf("Goodbye\n");
+
+	if(buf)
+		free(buf);
+	destroydefs(defs);
+	free(defs);
+	return 0;
+}
