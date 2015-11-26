@@ -60,8 +60,6 @@ static Templateo *g_generic(Templateo *tempo, void *data, void *info);
 static void  r_gentree(Templateo **tempop, genHdrInfo *ghi, void *data);
 
 static int axtoi(const char *str);
-static void c_cleanuptemps(Template **tempp, Template *lst);
-static void c_flattentempL(Template *temps, Template *lst);
 static int c_getarr(char *str);
 static void c_parsemems(Template *temp, char *str);
 static void c_tempsfromtemplates(Template **lstp);
@@ -359,32 +357,6 @@ axtoi(const char *str) {
 	return ret;
 }
 
-void
-c_cleanuptemps(Template **tempp, Template *lst) {
-	Template *temps;
-	Template *nlst, *olst = lst;
-	int n;
-
-	for(n = 0; lst; lst = nlst, ++n) nlst = lst->next;
-	temps = calloc(sizeof(Template), n+1);
-	c_flattentempL(temps, olst);
-	qsort(temps, n, sizeof(Template), tempcmp);
-	c_resolvtemps(temps);
-	*tempp = temps;
-}
-
-void
-c_flattentempL(Template *temps, Template *lst) {
-	Template *nlst = lst->next;
-	int i;
-
-	for(i = 0; lst; lst = nlst, ++i) {
-		nlst = lst->next;
-		memcpy(temps+i, lst, sizeof(Template));
-		free(lst);
-	}
-}
-
 int
 c_getarr(char *str) {
 	char *e;
@@ -510,10 +482,9 @@ c_tempsfromtemplates(Template **lstp) {
 void
 c_temps(Template **tempp) {
 	Template *temps = NULL;
-	Template *lst = NULL;
 
-	c_tempsfromtemplates(&lst);
-	c_cleanuptemps(&temps, lst);
+	c_tempsfromtemplates(&temps);
+	c_resolvtemps(temps);
 	if(debug > 0)
 		i_printtemps(temps);
 
@@ -573,7 +544,7 @@ c_resolvtemps(Template *temps) {
 	char *f = NULL;
 	int unresolved, i;
 
-	for(temp = temps; temp->name; ++temp) {
+	for(temp = temps; temp; temp = temp->next) {
 		for(f = temp->format, i = 0; *f; ++f, ++i) {
 			info = &(temp->tinfo[i]);
 			if(*f == 'p' || *f == '?') {
@@ -588,11 +559,11 @@ c_resolvtemps(Template *temps) {
 	for(unresolved = -1, i = 0; 
 			unresolved != 0; 
 			unresolved = i, i = 0) {
-		for(temp = temps; temp->name; ++temp)
+		for(temp = temps; temp; temp = temp->next)
 			i += c_resolvsize(temps, temp);
 		if(unresolved && i == unresolved) {
 			fprintf(stderr, "Possible circular dependancy in inline structs");
-			for(temp = temps; temp; ++temp) {
+			for(temp = temps; temp; temp = temp->next) {
 				if(c_resolvsize(temps, temp))
 					fprintf(stderr, "%s\n", temp->name);
 			}
@@ -600,7 +571,7 @@ c_resolvtemps(Template *temps) {
 		}
 	}
 
-	for(temp = temps; temp->name; ++temp)
+	for(temp = temps; temp; temp = temp->next)
 		c_resolvnullnames(temp);
 }
 
@@ -677,7 +648,7 @@ void
 c_resolvtype(Template *temps, char **type) {
 	Template *temp;
 
-	for(temp = temps; temp->name; ++temp) {
+	for(temp = temps; temp; temp = temp->next) {
 		if(strcmp(temp->name, *type)==0)
 			goto found;
 	}
@@ -718,7 +689,7 @@ void
 d_temps(Template *temps) {
 	while(temps->name) {
 		d_temp(temps);
-		++temps;
+		temps = temps->next;
 	}
 }
 
@@ -743,7 +714,7 @@ Template *
 gettemp(Template *temps, char *type) {
 	Template *temp;
 
-	for(temp = temps; temp->name; ++temp) {
+	for(temp = temps; temp; temp = temp->next) {
 		if(strcmp(temp->name, type)==0)
 			return temp;
 	}
@@ -821,7 +792,7 @@ int
 i_maxtypelen(Template *temps) {
 	int i, l;
 
-	for(i = 0; temps->name; ++temps) {
+	for(i = 0; temps; temps = temps->next) {
 		if((l = strlen(temps->name)) > i)
 			i = l;
 	}
@@ -860,7 +831,7 @@ i_printtemps(Template *temps) {
 	while(temps->name) {
 		i_printtemp(temps);
 		printf("\n");
-		++temps;
+		temps = temps->next;
 	}
 }
 
@@ -919,8 +890,8 @@ i_scantype(Template *temps, Template **tempp, int max, char *line) {
 			return c - line + i;
 		}
 
-		while(temp->name && (n = strncmp(temp->name, c, i+1)) < 0) ++temp;
-		if(!(temp->name) || n != 0) return 0;
+		while(temp && (n = strncmp(temp->name, c, i+1)) < 0) temp = temp->next;
+		if(!(temp) || n != 0) return 0;
 	}
 	return 0;
 }
