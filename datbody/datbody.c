@@ -739,13 +739,10 @@ void
 i_cmdloop(Templateo *tempos, genHdrInfo *ghi, void *data) {
 	char line[512];
 	unsigned char *buf = data;
-	int typelen, nread;
+	int rread;
 	unsigned int arr;
-	Template *temps = ghi->temps, *xtemp;
+	Template *temps = ghi->temps;
 	Templateo tempo;
-
-	typelen = i_maxtypelen(temps);
-	xtemp = gettemp(temps, "x");
 
 	while(1) {
 		/* read off */
@@ -767,18 +764,18 @@ i_cmdloop(Templateo *tempos, genHdrInfo *ghi, void *data) {
 			printf("Unrecognized command\n");
 			continue;
 		}
-		nread = i_readstr(line+1, 511);
+		rread = i_readstr(line+1, 511);
 		i_scantype(temps, &(tempo.temp), line);
 		if(!tempo.temp) {
 			printf("Unrecognized type\n");
-			if(nread) fflush(NULL);
+			if(rread) fflush(NULL);
 			continue;
 		}
 
 		/* read optional size */
 		arr = 1;
 		line[0] = 0;
-		if(nread && i_skipws(line) && !isspace(line[0])) {
+		if(rread && i_skipws(line) && !isspace(line[0])) {
 			if(i_readstr(line+1, 511) && i_skipws(NULL)) {
 				printf("Unrecognized command\n");
 				fflush(NULL);
