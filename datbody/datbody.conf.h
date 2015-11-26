@@ -7,10 +7,10 @@ static struct {
 
 static const struct {
 	char *str;
-	void (*print)(Defo*,void*);
-	int  (*null)(Defo*,void*);
-	Defo *(*gen)(Defo*,void*,void*);
-} protos[] = {
+	void (*print)(Templateo*,void*);
+	int  (*null)(Templateo*,void*);
+	Templateo *(*gen)(Templateo*,void*,void*);
+} templates[] = {
 	{ "hdr xxxxxxxx filesz bodysz reltnum rootnum xrefnum", p_hdr, 0, g_hdr },
 	{ "root xx child name", p_generic, 0, g_generic },
 	{ "xyz fff x y z", p_generic, 0, g_generic },
