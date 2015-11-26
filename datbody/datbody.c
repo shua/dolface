@@ -70,7 +70,6 @@ static void c_resolvmem(Template *temp, void *mem);
 static void c_resolvnullnames(Template *temp);
 static int c_resolvsize(Template *temps, Template *temp);
 static void c_resolvtype(Template *temps, char **type);
-static int  tempcmp(const void *a, const void *b);
 static void d_temp(Template *temp);
 static void d_temps(Template *temps);
 static void eprintf(const char *, ...);
@@ -81,7 +80,7 @@ static void i_printtemp(Template *temp);
 static void i_printtemps(Template *temps);
 static int  i_scanarr(unsigned int *arrp, char *line);
 static int  i_scanoff(unsigned int *offp, char *line);
-static int  i_scantype(Template *temps, Template **tempp, int max, char *line);
+static int  i_scantype(Template *temps, Template **tempp, char *line);
 static int  n_generic(Templateo *tempo, void *data);
 static void p_generic(Templateo *tempo, void *data);
 static void p_hdr(Templateo *tempo, void *data);
@@ -134,10 +133,8 @@ r_tempoappend(Templateo **arrp, size_t arrn, Templateo *app, size_t appn) {
 
 Templateo *
 g_root(Templateo *tempo, void *data, void *info) {
-	Template *temp = tempo->temp, *childtemp;
 	Templateo *ret;
 	unsigned char *buf = data;
-	int i, reti=0;
 	unsigned int offbuf, namebuf;
 	genHdrInfo *ghi = info;
 
@@ -273,7 +270,6 @@ g_hdr(Templateo *tempo, void *data, void *infop) {
 	genHdrInfo *ghi = infop;
 	unsigned char *buf = data;
 	int i, reti=0;
-	unsigned int ibuf;
 	unsigned int filesz, bodysz, reltnum, rootnum, xrefnum, strtabsz;
 	unsigned int rootoff;
 
@@ -288,7 +284,7 @@ g_hdr(Templateo *tempo, void *data, void *infop) {
 	r_unpack(temp, data, &rootnum, 3);
 	r_unpack(temp, data, &xrefnum, 4);
 	strtabsz -= (rootnum + xrefnum) * 8;
-	ghi->strs = buf + filesz - strtabsz;
+	ghi->strs = (char *)(buf + filesz - strtabsz);
 
 	ret = calloc(rootnum, sizeof(Templateo));
 	roottemp = gettemp(ghi->temps, "root");
@@ -659,11 +655,6 @@ found:
 	(*(Template**)type) = temp;
 }
 
-int 
-tempcmp(const void *a, const void *b) {
-	return strcmp(((Template*)a)->name, ((Template*)b)->name);
-}
-
 void
 d_temp(Template *temp) {
 	int mem;
@@ -687,7 +678,7 @@ d_temp(Template *temp) {
 
 void
 d_temps(Template *temps) {
-	while(temps->name) {
+	while(temps) {
 		d_temp(temps);
 		temps = temps->next;
 	}
@@ -721,48 +712,80 @@ gettemp(Template *temps, char *type) {
 	return NULL;
 }
 
+int
+i_skipws(char *dst) {
+	int r;
+	char c = 0;
+	while((r = read(STDIN_FILENO, &c, 1)) && isspace(c) && c != '\n');
+	if(dst) *dst = c;
+	return r;
+}
+
+int
+i_readstr(char *dst, int max) {
+	char c;
+	int r;
+	while((r = read(STDIN_FILENO, &c, 1)) && !isspace(c) && max--)
+		if(dst) {
+			*dst = c;
+			++dst;
+		}
+	if(c == '\n') r = 0;
+	*dst = 0;
+	return r;
+}
+
 void
 i_cmdloop(Templateo *tempos, genHdrInfo *ghi, void *data) {
 	char line[512];
 	unsigned char *buf = data;
-	int i, typelen, scanned, nread;
+	int typelen, nread;
 	unsigned int arr;
 	Template *temps = ghi->temps, *xtemp;
 	Templateo tempo;
-	int hfd;
 
 	typelen = i_maxtypelen(temps);
 	xtemp = gettemp(temps, "x");
 
 	while(1) {
-		if((nread = read(STDIN_FILENO, line, 512)) <= 0)
-			return;
-		for(i=0; line[i] !='\n'; ++i);
-		line[i] = 0;
-		if(line[0] == 0) continue;
-		--nread;
-		scanned = 0;
-
-		tempo.off = MAXOFF;
-		if(scanned < nread && ((i = i_scanoff(&tempo.off, line+scanned)) <= 0 || tempo.off == MAXOFF)) {
-			fprintf(stderr, "Failed to scan off %d %x\n", i, tempo.off);
+		/* read off */
+		line[0] = 0;
+		if(!i_skipws(line)) {
+			return; /* no newline or anything */
+		}
+		if(isspace(line[0])) continue;
+		if(!i_readstr(line+1, 511)) {
+			printf("Unrecognized command\n");
 			continue;
 		}
-		scanned += i;
+		i_scanoff(&tempo.off, line);
 
+		/* read type */
 		tempo.temp = NULL;
-		if(scanned < nread && ((i = i_scantype(temps, &(tempo.temp), typelen, line+scanned)) <= 0 || tempo.temp == NULL)) {
-			fprintf(stderr, "Unrecognized type \"%s\"\n", line);
+		line[0] = 0;
+		if(!i_skipws(line)) {
+			printf("Unrecognized command\n");
 			continue;
 		}
-		scanned += i;
+		nread = i_readstr(line+1, 511);
+		i_scantype(temps, &(tempo.temp), line);
+		if(!tempo.temp) {
+			printf("Unrecognized type\n");
+			if(nread) fflush(NULL);
+			continue;
+		}
 
+		/* read optional size */
 		arr = 1;
-		if(scanned < nread && ((i = i_scanarr(&arr, line+scanned)) <= 0 || arr == 0)) {
-			fprintf(stderr, "Weird array string \"%s\"\n", line);
-			continue;
+		line[0] = 0;
+		if(nread && i_skipws(line) && !isspace(line[0])) {
+			if(i_readstr(line+1, 511) && i_skipws(NULL)) {
+				printf("Unrecognized command\n");
+				fflush(NULL);
+				continue;
+			}
+			i_scanarr(&arr, line);
 		}
-		scanned += i;
 
 		if(tempo.temp->print) {
 			if(arr != -1) {
@@ -840,12 +863,6 @@ i_scanarr(unsigned int *arrp, char *line) {
 	unsigned int i;
 	char *c = line;
 
-	while(*c && isspace(*c)) ++c;
-	if(!(*c)) {
-		*arrp = 1;
-		return c - line;
-	}
-
 	if(*c == '*') {
 		*arrp = -1;
 		return c - line + 1;
@@ -862,8 +879,6 @@ i_scanoff(unsigned int *offp, char *line) {
 	unsigned int i;
 	char *c = line;
 
-	while(*c && isspace(*c)) ++c;
-	if(!(*c)) return 0;
 	if(c[0] == '0' && c[1] == 'x')
 		i = axtoi(c+2);
 	else
@@ -875,31 +890,14 @@ i_scanoff(unsigned int *offp, char *line) {
 }
 
 int
-i_scantype(Template *temps, Template **tempp, int max, char *line) {
-	Template *temp = temps;
-	char *c;
-	int i = 0, n;
-
-	c = line;
-	while((*c) && isspace(*c)) ++c;
-	if(!(*c)) return 0;
-
-	for(i = 0; i <= max; ++i) {
-		if((!(c[i]) || isspace(c[i])) && temp->name[i] == '\0') {
-			*tempp = temp;
-			return c - line + i;
-		}
-
-		while(temp && (n = strncmp(temp->name, c, i+1)) < 0) temp = temp->next;
-		if(!(temp) || n != 0) return 0;
-	}
-	return 0;
+i_scantype(Template *temps, Template **tempp, char *line) {
+	*tempp = gettemp(temps, line);
+	return strlen(line);
 }
 
 int
 n_generic(Templateo *tempo, void *data) {
 	Template *temp = tempo->temp;
-	unsigned int off = tempo->off;
 	unsigned int ibuf;
 	unsigned char *buf = data;
 
@@ -912,7 +910,7 @@ p_generic(Templateo *tempo, void *data) {
 	Template *temp = tempo->temp;
 	unsigned int off = tempo->off;
 	char *f, *fmt = temp->format;
-	unsigned int ibuf, flags;
+	unsigned int ibuf;
 	float fbuf;
 	int i;
 
@@ -1013,8 +1011,6 @@ p_hdr(Templateo *tempo, void *data) {
 
 void
 p_char(Templateo *tempo, void *data) {
-	Template *temp = tempo->temp;
-	unsigned int off = tempo->off;
 	if(*(char*)data == 0)
 		printf("\n");
 	else
@@ -1057,7 +1053,6 @@ void
 r_unpack(Template *temp, void *src, void *dst, int mem) {
 	unsigned char *data = src;
 	unsigned int ibuf;
-	float fbuf;
 
 	data += temp->off[mem];
 
@@ -1094,7 +1089,7 @@ main(int argc, char *argv[]) {
 	unsigned char *buf = NULL;
 	Template *temps;
 	genHdrInfo ghi;
-	Templateo *tempos;
+	Templateo *tempos = NULL;
 
 	ARGBEGIN {
 	case 'v': ++debug;
