@@ -69,6 +69,8 @@ static Object *g_root(Object *obj, void *data, Geninfo *gi);
 static Object *g_generic(Object *obj, void *data, Geninfo *gi);
 static void p_root(Object *obj, void *data, Geninfo *gi);
 static void r_gentree(Geninfo *gi, void *data);
+static Object *i_findobj(Object *objs, unsigned int off);
+static Object *i_treeorlocal(Object *local, void *data, Geninfo *gi);
 static void d_objs(Object *obj);
 static void d_obj(Object *obj);
 static void d_objrmdup(Object *obj);
@@ -81,7 +83,7 @@ static void c_tempsfromtemplates(Template **lstp);
 static void c_temps(Template **tempps);
 static Template *c_newtemp(Template *next, char *line);
 static void c_resolvtemps(Template *temp);
-static void c_resolvmem(Template *temp, void *mem);
+static void c_resolvmem(Template *temp, int mem);
 static void c_resolvnullnames(Template *temp);
 static int c_resolvsize(Template *temps, Template *temp);
 static void c_resolvtype(Template *temps, char **type);
@@ -108,6 +110,23 @@ static int debug = 0;
 #include "datbody.conf.h"
 
 char *argv0;
+
+Object *
+i_treeorlocal(Object *local, void *data, Geninfo *gi) {
+	Object *found;
+
+	found = i_findobj(gi->hdr, local->off);
+	if(!found && !local->temp) {
+		local->temp = gettemp(gi->temps, "x");
+		return local;
+	}
+	if(!found || (local->temp && found->temp != local->temp)) {
+		local->flags &= ~FTraverse;
+		local->temp->gen(local, data, gi);
+		return local;
+	}
+	return found;
+}
 
 void
 d_gi(Geninfo *gi) {
@@ -142,13 +161,14 @@ d_objrmdup(Object *obj) {
 void
 d_obj(Object *obj) {
 	if(!obj) return;
-	while(obj->nchild--) {
+	while(obj->child && obj->nchild--) {
 		if(obj->child[obj->nchild]) {
 			d_obj(obj->child[obj->nchild]);
 			free(obj->child[obj->nchild]);
 		}
 	}
-	free(obj->child);
+	if(obj->child)
+		free(obj->child);
 	obj->child = NULL;
 	if(obj->data)
 		free(obj->data);
@@ -160,7 +180,6 @@ r_gentree(Geninfo *gi, void *data) {
 	Object *obj;
 	Template *hdrtemp;
 
-	printf("r_gentree %s\n", gi->temps[0].name);
 	hdrtemp = gettemp(gi->temps, "hdr");
 	gi->hdr = obj = calloc(1, sizeof(Object));
 	obj->off = 0;
@@ -201,7 +220,7 @@ g_root(Object *obj, void *data, Geninfo *gi) {
 	unsigned char *buf = data;
 	unsigned int offbuf, namebuf;
 
-	printf("g_root %s %s %x\n", obj->temp->name, obj->temp->format, obj->off);
+	if(debug) printf("g_root %s %s %x\n", obj->temp->name, obj->temp->format, obj->off);
 	obj->data = malloc(obj->temp->size);
 	memcpy(obj->data, &buf[obj->off], obj->temp->size);
 
@@ -223,46 +242,71 @@ g_root(Object *obj, void *data, Geninfo *gi) {
 	return obj;
 }
 
+int
+getsize(Object *obj, int mem) {
+	int a;
+
+	switch(obj->temp->tinfo[mem].arrterm) {
+	case SizeConst: 
+		return (obj->temp->tinfo[mem].tconst) ? obj->temp->tinfo[mem].tconst : 1;
+	case SizeVar:
+		r_unpack(obj->temp, obj->data, &a, obj->temp->tinfo[mem].tconst);
+		return a;
+		break;
+	case SizeTerm:
+/*		printf("TODO null terminated lists as children\n"); */
+	default:
+		return 1;
+	}
+}
+
 Object *
 g_generic(Object *obj, void *data, Geninfo *gi) {
 	Object *tmp;
 	unsigned char *buf = data;
-	int i, j;
+	int i, j, a;
 	unsigned int ibuf;
 
-	printf("g_generic %s %s %x\n", obj->temp->name, obj->temp->format, obj->off);
-	for(i=0,obj->nchild=0; obj->temp->format[i]; ++i) 
-		if(obj->temp->format[i] == 'p' || obj->temp->format[i] == '?') 
-			++obj->nchild;
-	/* need to take arrays into account */
-	obj->child = calloc(obj->nchild, sizeof(Object*));
-
+	if(debug) printf("g_generic %s %s %x\n", obj->temp->name, obj->temp->format, obj->off);
 	obj->data = malloc(obj->temp->size);
 	memcpy(obj->data, &buf[obj->off], obj->temp->size);
+
+	for(i=0,obj->nchild=0; obj->temp->format[i]; ++i)
+		if(obj->temp->format[i] == 'p' || obj->temp->format[i] == '?')
+			obj->nchild += getsize(obj, i);
+	obj->child = calloc(obj->nchild, sizeof(Object*));
 
 	for(i=0,j=0; obj->temp->format[i]; ++i) {
 		switch(obj->temp->format[i]) {
 		case 'p':
 			r_unpack(obj->temp, obj->data, &ibuf, i);
 			if(ibuf) {
-				tmp = obj->child[j] = calloc(1, sizeof(Object));
-				tmp->temp = obj->temp->tinfo[i].temp;
-				tmp->off = ibuf+gi->hdr->temp->size;
-//				tmp->temp->gen(tmp, data, gi);
+				ibuf += gi->hdr->temp->size;
+				a = getsize(obj, i);
+				while(a-- > 0) {
+					tmp = obj->child[j] = calloc(1, sizeof(Object));
+					tmp->temp = obj->temp->tinfo[i].temp;
+					tmp->off = ibuf;
+					tmp->temp->gen(tmp, data, gi);
+					ibuf += tmp->temp->size;
+					++j;
+				}
 			}
-			++j;
-			/* need to loop for arrays */
 			break;
 		case '?':
-			tmp = obj->child[j] = calloc(1, sizeof(Object));
-			tmp->temp = obj->temp->tinfo[i].temp;
-			tmp->off = obj->temp->off[i] + obj->off;
-			tmp->flags = obj->flags | FInline;
-			/* don't check FTraverse, we always traverse inlines */
-			if(tmp->temp->gen)
-				tmp->temp->gen(tmp, data, gi);
-			++j;
-			/* need to loop for arrays */
+			ibuf = obj->temp->off[i] + obj->off;
+			a = getsize(obj, i);
+			while(a-- > 0) {
+				tmp = obj->child[j] = calloc(1, sizeof(Object));
+				tmp->temp = obj->temp->tinfo[i].temp;
+				tmp->off = ibuf;
+				tmp->flags = obj->flags | FInline;
+				/* don't check FTraverse, we always traverse inlines */
+				if(tmp->temp->gen)
+					tmp->temp->gen(tmp, data, gi);
+				ibuf += tmp->temp->size;
+				++j;
+			}
 			break;
 		default:
 			break;
@@ -302,7 +346,7 @@ r_tempfromroot(Template *temps, char *name) {
 	int checkn;
 	
 	namen = strlen(name);
-	printf("trying to match %s\n", name);
+/*	printf("trying to match %s\n", name); */
 	for(i=0; i<LEN(rootnames); ++i) {
 		if(!rootnames[i].name) continue;
 
@@ -470,7 +514,7 @@ c_parsemems(Template *temp, char *str) {
 				b = e+1;
 				while(isspace(*b)) ++b;
 			}
-			if(last) eprintf("Cannot leave %c name empty, needs TYPE specifier (at format[%d])", *f, mem);
+			if(last) eprintf("Cannot leave %c name empty, needs TYPE specifier (at %s[%d])", *f, temp->name, mem);
 			if(*b == '(') {
 				++b; e = b;
 				while((*e) && *e != ')') ++e;
@@ -567,7 +611,7 @@ c_newtemp(Template *next, char *line) {
 		case '.':
 		case ':':
 		case '?': ++c; break;
-		default:  eprintf("Invalid FORMAT character %c", *c);
+		default:  eprintf("Invalid FORMAT character %c in %s", *c, temp->name);
 		}
 	}
 	memn = c - line;
@@ -598,7 +642,7 @@ c_resolvtemps(Template *temps) {
 				c_resolvtype(temps, &(info->type));
 			}
 			if(*f == 'p' && info->arrterm == SizeVar) {
-				c_resolvmem(temp, &(info->tvar));
+				c_resolvmem(temp, i);
 			}
 		}
 	}
@@ -623,28 +667,26 @@ c_resolvtemps(Template *temps) {
 }
 
 void
-c_resolvmem(Template *temp, void *mem) {
-	char *f;
+c_resolvmem(Template *temp, int mem) {
 	int i;
-	for(f = temp->format, i = 0; *f; ++f, ++i) {
-		switch(*f) {
+
+	for(i=0; temp->format[i]; ++i) {
+		switch(temp->format[i]) {
 		case 'b':
 		case 'w':
 		case 'x':
-		case '.':
-		case ':':
-			if(strcmp(temp->mems[i], *(char**)mem)==0)
+			if(strcmp(temp->mems[i], temp->tinfo[mem].tvar)==0)
 				goto found;
 		default:
 			continue;
 		}
 	}
 	eprintf("Couldn't resolve array length \"%s\" to member name in %s",
-			*(char*)mem, temp->name);
+			temp->tinfo[mem].tvar, temp->name);
 
 found:
-	free(*(char**)mem);
-	*(unsigned int*)mem = i;
+	free(temp->tinfo[mem].tvar);
+	temp->tinfo[mem].tconst = i;
 }
 
 void
@@ -810,34 +852,29 @@ i_cmdloop(Object *objs, Geninfo *gi, void *data) {
 	int rread;
 	unsigned int arr;
 	Object obj, *found;
+	Template *xtemp;
 
+	xtemp = gettemp(gi->temps, "x");
 	while(1) {
 		/* read off */
 		obj = (Object){ 0 };
 		line[0] = 0;
-		if(!i_skipws(line)) {
-			return; /* no newline or anything */
-		}
+		if(!i_skipws(line)) return; /* ^D */
 		if(isspace(line[0])) continue;
-		if(!i_readstr(line+1, 511)) {
-			printf("Unrecognized command\n");
-			continue;
-		}
+		rread = i_readstr(line+1, 511);
 		i_scanoff(&obj.off, line);
 
 		/* read type */
 		obj.temp = NULL;
 		line[0] = 0;
-		if(!i_skipws(line)) {
-			printf("Unrecognized command\n");
-			continue;
-		}
-		rread = i_readstr(line+1, 511);
-		i_scantype(gi->temps, &(obj.temp), line);
-		if(!obj.temp) {
-			printf("Unrecognized type\n");
-			if(rread) fflush(NULL);
-			continue;
+		if(rread && i_skipws(line) && !isspace(line[0])) {
+			rread = i_readstr(line+1, 511);
+			i_scantype(gi->temps, &(obj.temp), line);
+			if(!obj.temp) {
+				printf("Unrecognized type %s\n", line);
+				if(rread) fflush(NULL);
+				continue;
+			}
 		}
 
 		/* read optional size */
@@ -852,40 +889,27 @@ i_cmdloop(Object *objs, Geninfo *gi, void *data) {
 			i_scanarr(&arr, line);
 		}
 
-		printf("inputted %x %s\n", obj.off, obj.temp->name);
 		if(arr != -1) {
 			while(arr > 0) {
-				found = i_findobj(gi->hdr, obj.off);
-				if(!found || found->temp != obj.temp) {
-					found = &obj;
-					obj.flags &= ~FTraverse;
-					obj.temp->gen(&obj, data, gi);
-				}
+				if(!(found = i_treeorlocal(&obj, data, gi))) break;
 				found->temp->print(found, buf+found->off, gi);
-				if(found == &obj)
-					d_objs(&obj);
+				d_objs(&obj);
 				obj.off += found->temp->size;
 				--arr;
 			}
 		} else {
-			if(!found->temp->null) {
-				fprintf(stderr, "Type %s does not support storage as null terminated array\n", found->temp->name);
-				continue;
-			}
 			while(1) {
-				found = i_findobj(gi->hdr, obj.off);
-				if(!found || found->temp != obj.temp) {
-					found = &obj;
-					obj.flags &= ~FTraverse;
-					obj.temp->gen(&obj, data, gi);
-				}
+				if(!(found = i_treeorlocal(&obj, data, gi))) break;
 
+				if(!found->temp->null) {
+					fprintf(stderr, "Type %s does not support storage as null terminated array\n", found->temp->name);
+					break;
+				}
 				if(found->temp->null(found, buf+found->off))
 					break;
 
 				found->temp->print(found, buf+found->off, gi);
-				if(found == &obj)
-					d_objs(&obj);
+				d_objs(&obj);
 				obj.off += found->temp->size;
 			}
 		}
@@ -1007,28 +1031,21 @@ p_generic(Object *obj, void *data, Geninfo *gi) {
 			printf("%f", fbuf);
 			break;
 		case '?':
-			printf("%08x %s 1", 
+			printf("%08x %s", 
 					off + temp->off[i], 
 					temp->tinfo[i].temp->name);
+			ibuf = getsize(obj, i);
+			if(ibuf > 1)
+				printf(" %d", getsize(obj, i));
 			break;
 		case 'p':
 			r_unpack(temp, data, &ibuf, i);
-			printf("%08x %s ",
+			printf("%08x %s",
 					(ibuf) ? ibuf + 0x20 : 0,
 					temp->tinfo[i].temp->name);
-			switch(temp->tinfo[i].arrterm) {
-			case SizeConst:
-				if(temp->tinfo[i].tconst)
-					printf("%d", temp->tinfo[i].tconst);
-				break;
-			case SizeVar:
-				r_unpack(temp, data, &ibuf, temp->tinfo[i].tconst);
-				printf("%d", ibuf);
-				break;
-			case SizeTerm:
-				printf("*");
-				break;
-			}
+			ibuf = getsize(obj, i);
+			if(ibuf > 1)
+				printf(" %d", getsize(obj, i));
 			break;
 		}
 		printf("\n");
