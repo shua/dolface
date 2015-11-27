@@ -1,6 +1,7 @@
 CC=clang
 #CC=musl-gcc
-CFLAGS=-static -g -Wall
+#CFLAGS=-static -g -Wall
+CFLAGS=-g -Wall
 CCS=clang
 CSFLAGS=-g
 

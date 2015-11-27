@@ -13,6 +13,7 @@
 #define MAXOFF 0xffffffff
 
 enum { SizeConst, SizeVar, SizeTerm }; /* array size */
+enum { FWhiteBlack = 1, FInline = 1<<1, FTraverse = 1<<2 };
 
 typedef struct Template Template;
 typedef struct {
@@ -27,37 +28,51 @@ typedef struct {
 	};
 } Tempinfo;
 
-typedef struct Templateo Templateo;
+typedef struct Object Object;
+typedef struct Geninfo Geninfo;
 struct Template {
 	char *name;
 	char *format;
 	char **mems;
 	Tempinfo *tinfo;
 	int *off;
-	void (*print)(Templateo*,void*);
-	int (*null)(Templateo*,void*);
-	Templateo *(*gen)(Templateo*,void*,void*);
+	void (*print)(Object*,void*, Geninfo*);
+	int (*null)(Object*,void*);
+	Object *(*gen)(Object*,void*,Geninfo*);
 	unsigned int size;
-	unsigned int cmem;
+	unsigned int lmem;
 	Template *next;
 };
 
-struct Templateo {
+struct Object {
 	unsigned int off;
 	Template* temp;
+	unsigned char *data;
+	Object **child;
+	int nchild;
+	int flags;
 };
 
-typedef struct genHdrInfo {
+struct Geninfo {
 	Template *temps;
-	Template *tempx;
 	char *strs;
-} genHdrInfo;
+	Object *hdr;
+	Object *parent;
+	int flags;
+};
 
-static int   r_tempoappend(Templateo **arrp, size_t arrn, Templateo *app, size_t appn);
-static Template  *r_tempfromroot(Template *temps, char *name);
-static Templateo *g_hdr(Templateo *tempo, void *data, void *infop);
-static Templateo *g_generic(Templateo *tempo, void *data, void *info);
-static void  r_gentree(Templateo **tempop, genHdrInfo *ghi, void *data);
+static int r_objsappend(Object **arrp, size_t arrn, Object *app, size_t appn);
+static int r_objslen(Object *objs);
+static Template *r_tempfromroot(Template *temps, char *name);
+static Object *g_hdr(Object *obj, void *data, Geninfo *gi);
+static Object *g_root(Object *obj, void *data, Geninfo *gi);
+static Object *g_generic(Object *obj, void *data, Geninfo *gi);
+static void p_root(Object *obj, void *data, Geninfo *gi);
+static void r_gentree(Geninfo *gi, void *data);
+static void d_objs(Object *obj);
+static void d_obj(Object *obj);
+static void d_objrmdup(Object *obj);
+static void d_gi(Geninfo *gi);
 
 static int axtoi(const char *str);
 static int c_getarr(char *str);
@@ -74,17 +89,16 @@ static void d_temp(Template *temp);
 static void d_temps(Template *temps);
 static void eprintf(const char *, ...);
 static Template *gettemp(Template *temps, char *type);
-static void i_cmdloop(Templateo *tempos, genHdrInfo *ghi, void *data);
-static int  i_maxtypelen(Template *temps);
+static void i_cmdloop(Object *objs, Geninfo *gi, void *data);
 static void i_printtemp(Template *temp);
 static void i_printtemps(Template *temps);
 static int  i_scanarr(unsigned int *arrp, char *line);
 static int  i_scanoff(unsigned int *offp, char *line);
 static int  i_scantype(Template *temps, Template **tempp, char *line);
-static int  n_generic(Templateo *tempo, void *data);
-static void p_generic(Templateo *tempo, void *data);
-static void p_hdr(Templateo *tempo, void *data);
-static void p_char(Templateo *tempo, void *data);
+static int  n_generic(Object *obj, void *data);
+static void p_generic(Object *obj, void *data, Geninfo *gi);
+static void p_hdr(Object *obj, void *data, Geninfo *gi);
+static void p_char(Object *obj, void *data, Geninfo *gi);
 static void r_dat(void **dst, char *file);
 static void r_unpack(Template *temp, void *src, void *dst, int mem);
 static void usage();
@@ -96,141 +110,189 @@ static int debug = 0;
 char *argv0;
 
 void
-r_gentree(Templateo **tempop, genHdrInfo *ghi, void *data) {
-	Templateo *tempo = *tempop;
+d_gi(Geninfo *gi) {
+	if(gi->strs) free(gi->strs);
+	gi->strs = NULL;
+}
+
+void
+d_objs(Object *obj) {
+	d_objrmdup(obj);
+	d_obj(obj);
+}
+
+void
+d_objrmdup(Object *obj) {
+	int i;
+	if(!obj) return;
+
+	obj->flags ^= FWhiteBlack;
+	for(i=0; i<obj->nchild; ++i) {
+		if(!obj->child[i]) continue;
+		/* if flag is equal, then child has already been visited and is pointed at by something else */
+		if((obj->flags & FWhiteBlack) == (obj->child[i]->flags & FWhiteBlack)) {
+			obj->child[i] = NULL;
+			continue;
+		}
+		/* otherwise visit child */
+		d_objrmdup(obj->child[i]);
+	}
+}
+
+void
+d_obj(Object *obj) {
+	if(!obj) return;
+	while(obj->nchild--) {
+		if(obj->child[obj->nchild]) {
+			d_obj(obj->child[obj->nchild]);
+			free(obj->child[obj->nchild]);
+		}
+	}
+	free(obj->child);
+	obj->child = NULL;
+	if(obj->data)
+		free(obj->data);
+	obj->data = NULL;
+}
+
+void
+r_gentree(Geninfo *gi, void *data) {
+	Object *obj;
 	Template *hdrtemp;
 
-	printf("r_gentree %s\n", ghi->temps[0].name);
-	hdrtemp = gettemp(ghi->temps, "hdr");
-	tempo = calloc(1, sizeof(Templateo));
-	tempo[0].off = 0;
-	tempo[0].temp = hdrtemp;
-	printf("  hdrtemp->name %s\n", hdrtemp->name);
-	r_tempoappend(&tempo, 1, hdrtemp->gen(tempo, data, ghi), 0);
+	printf("r_gentree %s\n", gi->temps[0].name);
+	hdrtemp = gettemp(gi->temps, "hdr");
+	gi->hdr = obj = calloc(1, sizeof(Object));
+	obj->off = 0;
+	obj->temp = hdrtemp;
+	obj->flags |= FTraverse;
+	hdrtemp->gen(obj, data, gi);
+	
 }
 
 int
-r_tempoappend(Templateo **arrp, size_t arrn, Templateo *app, size_t appn) {
-	Templateo *arr = *arrp;
+r_objslen(Object *objs) {
+	int ret = 0;
+	if(!objs) return 0;
+	while(objs[ret].temp) ++ret;
+	return ret;
+}
 
-	if(!app) return arrn;
-	if(arrn == 0 && arr)
-		while(arr[arrn].temp) ++arrn;
-	if(appn == 0 && app)
-		while(app[appn].temp) ++appn;
+int
+r_objsappend(Object **arrp, size_t arrn, Object *app, size_t appn) {
+	Object *arr = *arrp;
 
-	++appn; // array of 3 will be 3 data plus 1 null terminator
+	if(!app || !app || !appn) return arrn;
 
-	if(!(arr = realloc(arr, (arrn + appn) * sizeof(Templateo)))) {
-		eprintf("realloc Templateo array");
+	if(!(arr = realloc(arr, (arrn + appn + 1) * sizeof(Object)))) {
+		eprintf("realloc Object array");
 		return 0;
 	}
 
-	memcpy(&arr[arrn-1], app, appn * sizeof(Templateo));
+	memcpy(&arr[arrn], app, appn * sizeof(Object));
+	arr[arrn + appn].temp = NULL;
 	*arrp = arr;
 	return arrn + appn;
 }
 
-Templateo *
-g_root(Templateo *tempo, void *data, void *info) {
-	Templateo *ret;
+Object *
+g_root(Object *obj, void *data, Geninfo *gi) {
+	Object *child;
 	unsigned char *buf = data;
 	unsigned int offbuf, namebuf;
-	genHdrInfo *ghi = info;
 
-	r_unpack(tempo->temp, &buf[tempo->off], &offbuf, 0);
-	r_unpack(tempo->temp, &buf[tempo->off], &namebuf, 1);
+	printf("g_root %s %s %x\n", obj->temp->name, obj->temp->format, obj->off);
+	obj->data = malloc(obj->temp->size);
+	memcpy(obj->data, &buf[obj->off], obj->temp->size);
 
-	ret = calloc(1, sizeof(Templateo));
-	ret->temp = r_tempfromroot(ghi->temps, &ghi->strs[namebuf]);
-	if(!ret->temp) ret->temp = gettemp(ghi->temps, "x");
+	r_unpack(obj->temp, obj->data, &offbuf, 0);
+	r_unpack(obj->temp, obj->data, &namebuf, 1);
 
-	ret->off = offbuf;
-	return ret;
+	obj->child = calloc(1, sizeof(Object*));
+	obj->nchild = 1;
+
+	child = obj->child[0] = calloc(1, sizeof(Object));
+	child->temp = r_tempfromroot(gi->temps, &gi->strs[namebuf]);
+	child->off = offbuf + gi->hdr->temp->size;
+	child->flags = obj->flags;
+	if(!child->temp) child->temp = gettemp(gi->temps, "x");
+	
+	if(child->temp->gen && (obj->flags & FTraverse))
+		child->temp->gen(child, data, gi);
+
+	return obj;
 }
 
-Templateo *
-g_generic(Templateo *tempo, void *data, void *info) {
-	Template *temp = tempo->temp;
-	Templateo *ret, *tmp, tmp2;
+Object *
+g_generic(Object *obj, void *data, Geninfo *gi) {
+	Object *tmp;
 	unsigned char *buf = data;
-	int i, reti=0;
+	int i, j;
 	unsigned int ibuf;
 
-	printf("g_generic %s %s %x\n", temp->name, temp->format, tempo->off);
-	for(i=0; temp->format[i]; ++i) {
-		switch(temp->format[i]) {
+	printf("g_generic %s %s %x\n", obj->temp->name, obj->temp->format, obj->off);
+	for(i=0,obj->nchild=0; obj->temp->format[i]; ++i) 
+		if(obj->temp->format[i] == 'p' || obj->temp->format[i] == '?') 
+			++obj->nchild;
+	/* need to take arrays into account */
+	obj->child = calloc(obj->nchild, sizeof(Object*));
+
+	obj->data = malloc(obj->temp->size);
+	memcpy(obj->data, &buf[obj->off], obj->temp->size);
+
+	for(i=0,j=0; obj->temp->format[i]; ++i) {
+		switch(obj->temp->format[i]) {
 		case 'p':
-			r_unpack(temp, &buf[tempo->off], &ibuf, i);
-			tmp2.temp = temp->tinfo[i].temp;
-			tmp2.off = ibuf;
-			tmp = tmp2.temp->gen(&tmp2, &buf[tempo->off], info);
+			r_unpack(obj->temp, obj->data, &ibuf, i);
+			if(ibuf) {
+				tmp = obj->child[j] = calloc(1, sizeof(Object));
+				tmp->temp = obj->temp->tinfo[i].temp;
+				tmp->off = ibuf+gi->hdr->temp->size;
+//				tmp->temp->gen(tmp, data, gi);
+			}
+			++j;
+			/* need to loop for arrays */
 			break;
 		case '?':
-			tmp2.temp = temp->tinfo[i].temp;
-			tmp2.off = temp->off[i] + tempo->off;
-			tmp = tmp2.temp->gen(&tmp2, &buf[tempo->off], info);
+			tmp = obj->child[j] = calloc(1, sizeof(Object));
+			tmp->temp = obj->temp->tinfo[i].temp;
+			tmp->off = obj->temp->off[i] + obj->off;
+			tmp->flags = obj->flags | FInline;
+			/* don't check FTraverse, we always traverse inlines */
+			if(tmp->temp->gen)
+				tmp->temp->gen(tmp, data, gi);
+			++j;
+			/* need to loop for arrays */
 			break;
 		default:
-			tmp = NULL;
 			break;
 		}
-		if(!tmp) continue;
-
-		if((reti = r_tempoappend(&ret, reti, tmp, 0)) == 0) {
-			eprintf("append Templateo array");
-			free(tmp);
-			free(ret);
-			return NULL;
-		}
 	}
 
-	return ret;
+	return obj;
 }
 
-Template *
-genroot(Template *tempx, Template *temps, char *strs, void *data, unsigned int off) {
+void
+p_root(Object *obj, void *data, Geninfo *gi) {
 	unsigned int ibuf;
-	Template *roottemp, *childtemp, *ret;
-	unsigned char *buf = data;
-
-	roottemp = gettemp(temps, "root");
-	if(!roottemp) {
-		eprintf("root type not defined");
-	}
-
-	printf("genroot\n");
-	r_unpack(roottemp, buf + off, &ibuf, 1);
-	printf("  strs[%d]\n", ibuf);
-	childtemp = r_tempfromroot(temps, &strs[ibuf]);
-	if(!childtemp) return NULL;
-
-	ret = calloc(1, sizeof(Template));
-	ret->next = tempx;
 	
-	ret->name = calloc(1, strlen(roottemp->name)+1);
-	ret->format = calloc(1, strlen(roottemp->format)+1);
-	ret->mems = calloc(2, sizeof(char*));
-	ret->tinfo = calloc(2, sizeof(Tempinfo));
-	ret->off = calloc(2, sizeof(int));
-	
-	strcpy(ret->name, roottemp->name);
-	strcpy(ret->format, "px");
-	ret->mems[0] = calloc(1, strlen(roottemp->mems[0]) + 1);
-	ret->mems[1] = calloc(1, strlen(roottemp->mems[1]) + 1);
-	strcpy(ret->mems[0], roottemp->mems[0]);
-	strcpy(ret->mems[1], roottemp->mems[1]);
-	ret->tinfo[0].temp = childtemp;
-	ret->off[0] = roottemp->off[0];
-	ret->off[1] = roottemp->off[1];
-	ret->print = roottemp->print;
-	ret->null = roottemp->null;
-	ret->gen = roottemp->gen;
-	ret->size = roottemp->size;
-	ret->cmem = roottemp->cmem;
+	printf("%08x p %*s : ", 
+	       obj->off,
+	       obj->temp->lmem,
+	       obj->temp->mems[0]);
+	r_unpack(obj->temp, obj->data, &ibuf, 0);
 
-
-	return ret;
+	printf("%x %s\n", ibuf + gi->hdr->temp->size, obj->child[0]->temp->name);
+	printf("%08x x %*s : ", 
+	       obj->off,
+	       obj->temp->lmem,
+	       obj->temp->mems[1]);
+	r_unpack(obj->temp, obj->data, &ibuf, 1);
+	printf("%d\n", ibuf);
+	printf("           %*s : %s\n",
+	       obj->temp->lmem,
+	       "str",
+	       &gi->strs[ibuf]);
 }
 
 Template *
@@ -240,6 +302,7 @@ r_tempfromroot(Template *temps, char *name) {
 	int checkn;
 	
 	namen = strlen(name);
+	printf("trying to match %s\n", name);
 	for(i=0; i<LEN(rootnames); ++i) {
 		if(!rootnames[i].name) continue;
 
@@ -261,55 +324,43 @@ r_tempfromroot(Template *temps, char *name) {
 	return NULL;
 }
 
-Templateo *
-g_hdr(Templateo *tempo, void *data, void *infop) {
-	Template *temp = tempo->temp;
+Object *
+g_hdr(Object *obj, void *data, Geninfo *gi) {
 	Template *roottemp;
-	Templateo *ret, *tmp;
-	Template *custroottemp;
-	genHdrInfo *ghi = infop;
+	Object *ret;
 	unsigned char *buf = data;
 	int i, reti=0;
 	unsigned int filesz, bodysz, reltnum, rootnum, xrefnum, strtabsz;
 	unsigned int rootoff;
 
-	printf("g_hdr\n");
-	r_unpack(temp, data, &filesz, 0);
-	strtabsz = filesz - 0x20;
-	r_unpack(temp, data, &bodysz, 1);
+	roottemp = gettemp(gi->temps, "root");
+	
+	obj->data = malloc(obj->temp->size);
+	memcpy(obj->data, data, obj->temp->size);
+
+	r_unpack(obj->temp, obj->data, &filesz, 0);
+	strtabsz = filesz - obj->temp->size;
+	r_unpack(obj->temp, obj->data, &bodysz, 1);
 	strtabsz -= bodysz;
-	r_unpack(temp, data, &reltnum, 2);
+	r_unpack(obj->temp, obj->data, &reltnum, 2);
 	strtabsz -= reltnum * 4;
 	rootoff = filesz - strtabsz;
-	r_unpack(temp, data, &rootnum, 3);
-	r_unpack(temp, data, &xrefnum, 4);
-	strtabsz -= (rootnum + xrefnum) * 8;
-	ghi->strs = (char *)(buf + filesz - strtabsz);
+	r_unpack(obj->temp, obj->data, &rootnum, 3);
+	r_unpack(obj->temp, obj->data, &xrefnum, 4);
+	strtabsz -= (rootnum + xrefnum) * roottemp->size;
+	gi->strs = malloc(strtabsz);
+	memcpy(gi->strs, buf + filesz - strtabsz, strtabsz);
 
-	ret = calloc(rootnum, sizeof(Templateo));
-	roottemp = gettemp(ghi->temps, "root");
-	for(i=0; i<rootnum; ++i) {
-		printf("loopey\n");
-		if((custroottemp = genroot(ghi->tempx, ghi->temps, ghi->strs, data, rootoff)) != NULL) {
-			printf("  custroottemp %s\n", custroottemp->name);
-			ret[i].temp = custroottemp;
-			ghi->tempx = custroottemp;
-		} else {
-			ret[i].temp = roottemp;
-		}
-		ret[i].off = rootoff + i * roottemp->size;
-	}
-
+	obj->child = calloc(rootnum, sizeof(Object*));
+	obj->nchild = rootnum;
 	reti = rootnum;
 	for(i=0; i<rootnum; ++i) {
-		tmp = ret[i].temp->gen(&ret[i], data, infop);
-		if(!tmp) continue;
-		if((reti = r_tempoappend(&ret, reti, tmp, 0)) == 0) {
-			eprintf("append Templateo array");
-			free(tmp);
-			free(ret);
-			return NULL;
-		}
+		ret = obj->child[i] = calloc(1, sizeof(Object));
+		ret->off = rootoff + i * roottemp->size;
+		ret->flags = obj->flags;
+		ret->temp = roottemp;
+		if(ret->temp->gen && (obj->flags & FTraverse))
+			ret->temp->gen(ret, data, gi);
 	}
 
 	return ret;
@@ -443,8 +494,8 @@ c_parsemems(Template *temp, char *str) {
 				*e = 0;
 				temp->mems[mem] = calloc(1, e-b+1);
 				strncpy(temp->mems[mem], b, e-b);
-				if(temp->cmem < (e-b))
-					temp->cmem = e-b;
+				if(temp->lmem < (e-b))
+					temp->lmem = e-b;
 			}
 			if(!last) b = e + 1;
 			break;
@@ -493,11 +544,11 @@ c_newtemp(Template *next, char *line) {
 	int memn = 0;
 	Template *temp;
 
-	temp = calloc(1, sizeof(Template));
 	while((*line) && isspace(*line)) ++line;
 	if(!(*line)) return NULL;
 	c = line;
 
+	temp = calloc(1, sizeof(Template));
 	while((*c) && !isspace(*c)) ++c;
 	if(!(*c)) eprintf("invalid type definition: there's only one word");
 	temp->name = calloc(1, c-line+1);
@@ -606,8 +657,8 @@ c_resolvnullnames(Template *temp) {
 		sprintf(temp->mems[i], "unk%0*x", d, temp->off[i]);
 	}
 
-	if(temp->cmem < 3+d)
-		temp->cmem = 3+d;
+	if(temp->lmem < 3+d)
+		temp->lmem = 3+d;
 }
 
 int
@@ -678,9 +729,13 @@ d_temp(Template *temp) {
 
 void
 d_temps(Template *temps) {
+	Template *next;
 	while(temps) {
+		next = temps->next;
 		d_temp(temps);
-		temps = temps->next;
+		temps->next = NULL;
+		free(temps);
+		temps = next;
 	}
 }
 
@@ -735,17 +790,30 @@ i_readstr(char *dst, int max) {
 	return r;
 }
 
+Object *
+i_findobj(Object *objs, unsigned int off) {
+	int i;
+	Object *found;
+	if(!objs) return NULL;
+	if(objs->off == off)
+		return objs;
+	for(i=0; i<objs->nchild; ++i)
+		if((found = i_findobj(objs->child[i], off)))
+			return found;
+	return NULL;
+}
+
 void
-i_cmdloop(Templateo *tempos, genHdrInfo *ghi, void *data) {
+i_cmdloop(Object *objs, Geninfo *gi, void *data) {
 	char line[512];
 	unsigned char *buf = data;
 	int rread;
 	unsigned int arr;
-	Template *temps = ghi->temps;
-	Templateo tempo;
+	Object obj, *found;
 
 	while(1) {
 		/* read off */
+		obj = (Object){ 0 };
 		line[0] = 0;
 		if(!i_skipws(line)) {
 			return; /* no newline or anything */
@@ -755,18 +823,18 @@ i_cmdloop(Templateo *tempos, genHdrInfo *ghi, void *data) {
 			printf("Unrecognized command\n");
 			continue;
 		}
-		i_scanoff(&tempo.off, line);
+		i_scanoff(&obj.off, line);
 
 		/* read type */
-		tempo.temp = NULL;
+		obj.temp = NULL;
 		line[0] = 0;
 		if(!i_skipws(line)) {
 			printf("Unrecognized command\n");
 			continue;
 		}
 		rread = i_readstr(line+1, 511);
-		i_scantype(temps, &(tempo.temp), line);
-		if(!tempo.temp) {
+		i_scantype(gi->temps, &(obj.temp), line);
+		if(!obj.temp) {
 			printf("Unrecognized type\n");
 			if(rread) fflush(NULL);
 			continue;
@@ -784,39 +852,46 @@ i_cmdloop(Templateo *tempos, genHdrInfo *ghi, void *data) {
 			i_scanarr(&arr, line);
 		}
 
-		if(tempo.temp->print) {
-			if(arr != -1) {
-				while(arr > 0) {
-					tempo.temp->print(&tempo, buf+tempo.off);
-					tempo.off += tempo.temp->size;
-					--arr;
+		printf("inputted %x %s\n", obj.off, obj.temp->name);
+		if(arr != -1) {
+			while(arr > 0) {
+				found = i_findobj(gi->hdr, obj.off);
+				if(!found || found->temp != obj.temp) {
+					found = &obj;
+					obj.flags &= ~FTraverse;
+					obj.temp->gen(&obj, data, gi);
 				}
-			} else {
-				if(!tempo.temp->null) {
-					fprintf(stderr, "Type %s does not support storage as null terminated array\n", tempo.temp->name);
-					continue;
-				}
-				while(!tempo.temp->null(&tempo, buf+tempo.off)) {
-					tempo.temp->print(&tempo, buf+tempo.off);
-					tempo.off += tempo.temp->size;
-				}
+				found->temp->print(found, buf+found->off, gi);
+				if(found == &obj)
+					d_objs(&obj);
+				obj.off += found->temp->size;
+				--arr;
 			}
-			putchar('\0');
-			if(fflush(NULL) != 0) eprintf("fflush:");
+		} else {
+			if(!found->temp->null) {
+				fprintf(stderr, "Type %s does not support storage as null terminated array\n", found->temp->name);
+				continue;
+			}
+			while(1) {
+				found = i_findobj(gi->hdr, obj.off);
+				if(!found || found->temp != obj.temp) {
+					found = &obj;
+					obj.flags &= ~FTraverse;
+					obj.temp->gen(&obj, data, gi);
+				}
+
+				if(found->temp->null(found, buf+found->off))
+					break;
+
+				found->temp->print(found, buf+found->off, gi);
+				if(found == &obj)
+					d_objs(&obj);
+				obj.off += found->temp->size;
+			}
 		}
+		putchar('\0');
 		if(fflush(NULL) != 0) eprintf("fflush:");
 	}
-}
-
-int
-i_maxtypelen(Template *temps) {
-	int i, l;
-
-	for(i = 0; temps; temps = temps->next) {
-		if((l = strlen(temps->name)) > i)
-			i = l;
-	}
-	return i;
 }
 
 void
@@ -827,7 +902,7 @@ i_printtemp(Template *temp) {
 		printf("%04x %c %*s",
 				temp->off[mem],
 				temp->format[mem],
-				temp->cmem,
+				temp->lmem,
 				(temp->mems[mem]) ? temp->mems[mem] : "");
 
 		switch(temp->format[mem]) {
@@ -848,7 +923,7 @@ i_printtemp(Template *temp) {
 
 void
 i_printtemps(Template *temps) {
-	while(temps->name) {
+	while(temps) {
 		i_printtemp(temps);
 		printf("\n");
 		temps = temps->next;
@@ -893,8 +968,8 @@ i_scantype(Template *temps, Template **tempp, char *line) {
 }
 
 int
-n_generic(Templateo *tempo, void *data) {
-	Template *temp = tempo->temp;
+n_generic(Object *obj, void *data) {
+	Template *temp = obj->temp;
 	unsigned int ibuf;
 	unsigned char *buf = data;
 
@@ -903,9 +978,9 @@ n_generic(Templateo *tempo, void *data) {
 }
 
 void 
-p_generic(Templateo *tempo, void *data) {
-	Template *temp = tempo->temp;
-	unsigned int off = tempo->off;
+p_generic(Object *obj, void *data, Geninfo *gi) {
+	Template *temp = obj->temp;
+	unsigned int off = obj->off;
 	char *f, *fmt = temp->format;
 	unsigned int ibuf;
 	float fbuf;
@@ -915,7 +990,7 @@ p_generic(Templateo *tempo, void *data) {
 		printf("%08x %c %*s : ", 
 		       off + temp->off[i], 
 		       *f, 
-		       temp->cmem, 
+		       temp->lmem, 
 		       temp->mems[i]);
 
 		switch(*f) {
@@ -939,11 +1014,12 @@ p_generic(Templateo *tempo, void *data) {
 		case 'p':
 			r_unpack(temp, data, &ibuf, i);
 			printf("%08x %s ",
-					ibuf + 0x20,
+					(ibuf) ? ibuf + 0x20 : 0,
 					temp->tinfo[i].temp->name);
 			switch(temp->tinfo[i].arrterm) {
 			case SizeConst:
-				printf("%d", temp->tinfo[i].tconst);
+				if(temp->tinfo[i].tconst)
+					printf("%d", temp->tinfo[i].tconst);
 				break;
 			case SizeVar:
 				r_unpack(temp, data, &ibuf, temp->tinfo[i].tconst);
@@ -960,9 +1036,9 @@ p_generic(Templateo *tempo, void *data) {
 }
 
 void 
-p_hdr(Templateo *tempo, void *data) {
-	Template *temp = tempo->temp;
-	unsigned int off = tempo->off;
+p_hdr(Object *obj, void *data, Geninfo *gi) {
+	Template *temp = obj->temp;
+	unsigned int off = obj->off;
 	char *f;
 	unsigned int ibuf;
 	int hdrsz = 0x20, rootsz = 0x8, offsz = 0x4, filesz;
@@ -973,7 +1049,7 @@ p_hdr(Templateo *tempo, void *data) {
 		printf("%08x %c %*s : ", 
 		       off + temp->off[i], 
 		       *f, 
-		       temp->cmem, 
+		       temp->lmem, 
 		       temp->mems[i]);
 		r_unpack(temp, data, &ibuf, i);
 		printf("%x", ibuf);
@@ -987,27 +1063,25 @@ p_hdr(Templateo *tempo, void *data) {
 			relt = hdrsz + ibuf;
 			break;
 		case 2: 
-			printf("         p %*s : %08x p %d\n", temp->cmem, "reltbl", relt, ibuf);
+			printf("         p %*s : %08x p %d\n", temp->lmem, "reltbl", relt, ibuf);
 			roots = relt + ibuf*offsz;
 			break;
 		case 3:
-			printf("         p %*s : %08x root %d\n", temp->cmem, "rootarr", roots, ibuf);
+			printf("         p %*s : %08x root %d\n", temp->lmem, "rootarr", roots, ibuf);
 			xrefs = roots + ibuf*rootsz;
 			break;
 		case 4:
-			printf("         p %*s : %08x root %d\n", temp->cmem, "xrefarr", xrefs, ibuf);
+			printf("         p %*s : %08x root %d\n", temp->lmem, "xrefarr", xrefs, ibuf);
 			strings = xrefs + ibuf*rootsz;
-			break;
-		case 5:
-			printf("         p %*s : %08x c %d\n", temp->cmem, "strings", strings, filesz - strings);
 			break;
 		}
 	}
+	printf("         p %*s : %08x c %d\n", temp->lmem, "strings", strings, filesz - strings);
 	if(fflush(NULL) != 0) eprintf("fflush:");
 }
 
 void
-p_char(Templateo *tempo, void *data) {
+p_char(Object *obj, void *data, Geninfo *gi) {
 	if(*(char*)data == 0)
 		printf("\n");
 	else
@@ -1085,8 +1159,8 @@ int
 main(int argc, char *argv[]) {
 	unsigned char *buf = NULL;
 	Template *temps;
-	genHdrInfo ghi;
-	Templateo *tempos = NULL;
+	Geninfo gi = { 0 };
+	Object *objs = NULL;
 
 	ARGBEGIN {
 	case 'v': ++debug;
@@ -1099,15 +1173,16 @@ main(int argc, char *argv[]) {
 
 	c_temps(&temps);
 	r_dat((void**)&buf, argv[0]);
-	ghi = (genHdrInfo){ temps, NULL, NULL };
-	//r_gentree(&tempos, &ghi, buf);
+	gi.temps = temps;
+	r_gentree(&gi, buf);
 
-	i_cmdloop(tempos, &ghi, buf);
+	i_cmdloop(objs, &gi, buf);
 	printf("Goodbye\n");
 
-	if(buf)
-		free(buf);
+	if(buf) free(buf);
+	d_objs(gi.hdr);
+	free(gi.hdr);
+	d_gi(&gi);
 	d_temps(temps);
-	free(temps);
 	return 0;
 }
