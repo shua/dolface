@@ -125,6 +125,7 @@ static RootSpec rootspecs[] = {
 };
 
 static Cmd cmds[] = {
+	{ "!", "execute shell cmd", cmd_sh, 0 },
 	{ "m", "prints file map",   cmd_map , 0 },
 	{ "a", "prints out assets", cmd_asset, 0 },
 	{ "p", "prints dat obj",    cmd_print, 0 },

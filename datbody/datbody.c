@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/wait.h>
 
 #include "arg.h"
 
@@ -94,8 +95,10 @@ static int cmd_map(char *args, Geninfo *gi, unsigned char *buf);
 static int cmd_asset(char *args, Geninfo *gi, unsigned char *buf);
 static int cmd_print(char *args, Geninfo *gi, unsigned char *buf);
 static int cmd_help(char *args, Geninfo *gi, unsigned char *buf);
+static int cmd_sh(char *args, Geninfo *gi, unsigned char *buf);
 static void cmd_printarr(Geninfo *gi, Object *obj, int arr, unsigned char *buf);
 static void cmd_printlist(Geninfo *gi, Object *obj, unsigned char *buf);
+static int cmd_printall(Geninfo *gi, unsigned char *buf);
 
 static int axtoi(const char *str);
 static int c_getarr(char *str);
@@ -147,6 +150,65 @@ static int debug = 0;
 #include "datbody.conf.h"
 
 char *argv0;
+
+int
+cmd_printall(Geninfo *gi, unsigned char *buf) {
+	pid_t child, child2;
+	int status, status2;
+	int pfd[2];
+	Object **pobj;
+
+	if(pipe(pfd)==-1) {
+		fprintf(stderr, "p: pipe\n");
+		return -1;
+	}
+
+	switch(child=fork()) {
+	case 0:
+		close(pfd[1]);
+		dup2(pfd[0],STDIN_FILENO);
+		execl("/bin/sh", "sh", "-c", "less", NULL);
+		eprintf("p: executing less");
+	case -1:
+		fprintf(stderr, "p: fork\n");
+		return -1;
+	default:
+		switch(child2=fork()) {
+		case 0:
+			fflush(stdout);
+			dup2(pfd[1],STDOUT_FILENO);
+			for(pobj=gi->map; *pobj; ++pobj)
+				(**pobj).temp->print(*pobj, buf+(**pobj).off, gi);
+			fflush(stdout);
+		case -1:
+			fprintf(stderr, "p: fork\n");
+			return -1;
+		default:
+			waitpid(child, &status, 0);
+			waitpid(child2, &status2, WNOHANG);
+			if(status2 == 0 || status2 == -1)
+				kill(child2, SIGKILL);
+		}
+	}
+	return status;
+}
+
+int
+cmd_sh(char *args, Geninfo *gi, unsigned char *buf) {
+	pid_t child;
+	int status = -1;
+	switch(child=fork()) {
+	case 0:
+		execl("/bin/sh", "sh", "-c", args, NULL);
+		eprintf("!: running script");
+	case -1:
+		fprintf(stderr, "!: running script\n");
+		return -1;
+	default:
+		waitpid(child, &status, 0);
+	}
+	return status;
+}
 
 int
 cmd_help(char *args, Geninfo *gi, unsigned char *buf) {
@@ -208,10 +270,18 @@ cmd_print(char *args, Geninfo *gi, unsigned char *buf) {
 	char arrstr[10];
 
 	argc = sscanf(args, "%x %63s %9s", &obj.off, tempname, arrstr);
+	if(argc == -1) {
+		return cmd_printall(gi, buf);
+	}
 	if(argc == 0) {
-		printf("p OFF [TYPE] [ARR]\n");
+		printf(
+			"Usage: p[?] [off] [type] [arr]\n"
+			"p                  print whole file through pager\n"
+			"p off [type] [len] print object at offset\n"
+			"p?                 print this help\n"
+		);
 		return 1;
-	} 
+	}
 	if(argc >= 2) {
 		obj.temp = gettemp(gi->temps, tempname);
 		if(!obj.temp)
@@ -228,10 +298,8 @@ cmd_print(char *args, Geninfo *gi, unsigned char *buf) {
 
 
 	if(arrstr[0] == '*') {
-		printf("p %x %s *\n", obj.off, obj.temp->name);
 		cmd_printlist(gi, &obj, buf);
 	} else {
-		printf("p %x %s %d\n", obj.off, (obj.temp) ? obj.temp->name : NULL, arr);
 		cmd_printarr(gi, &obj, arr, buf);
 	}
 
@@ -900,6 +968,7 @@ cmd_printarr(Geninfo *gi, Object *obj, int arr, unsigned char *buf) {
 				obj->temp = gettemp(gi->temps, "x");
 			obj->temp->gen(obj, buf, gi);
 		}
+		printf("p %x %s %d\n", found->off, found->temp->name, arr);
 		found->temp->print(found, buf+found->off, gi);
 		if(found == obj)
 			d_objs(obj);
@@ -925,6 +994,7 @@ cmd_printlist(Geninfo *gi, Object *obj, unsigned char *buf) {
 		   && found->temp->null(found, buf+found->off))
 			break;
 
+		printf("p %x %s *\n", found->off, found->temp->name);
 		found->temp->print(found, buf+found->off, gi);
 		if(found == obj)
 			d_objs(obj);
